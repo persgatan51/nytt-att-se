@@ -37,6 +37,12 @@
   .actions a.viaplay{background:#e4003a;border-color:#e4003a}
   .msg{color:var(--mut);text-align:center;padding:30px 10px}
   .more{display:block;margin:20px auto 0}
+  #searchView{position:fixed;inset:0;background:var(--bg);z-index:15;display:none;overflow:auto;
+              padding:env(safe-area-inset-top) 14px calc(30px + env(safe-area-inset-bottom))}
+  #searchView.open{display:block}
+  .searchbar{position:sticky;top:0;background:var(--bg);padding:12px 0 10px;z-index:2}
+  .searchbar input{flex:1}
+  .item.dim{opacity:.45}
   .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}
   .sheet.open{display:flex}
   .panel{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--line);padding-bottom:calc(20px + env(safe-area-inset-bottom))}
@@ -69,6 +75,7 @@
 <header>
   <div class="row">
     <h1>Nytt att se</h1>
+    <button id="btnSearch" aria-label="Sök">🔍</button>
     <button id="btnRefresh" aria-label="Uppdatera">↻</button>
     <button id="btnSettings" aria-label="Inställningar">⚙︎</button>
   </div>
@@ -88,6 +95,15 @@
   <p class="tip" id="filterNote" style="text-align:center"></p>
   <p class="tip" id="usage" style="text-align:center"></p>
 </main>
+
+<div id="searchView">
+  <div class="row searchbar">
+    <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Sök film, serie eller skådespelare">
+    <button id="closeSearch">Stäng</button>
+  </div>
+  <div id="searchStatus" class="msg"></div>
+  <div id="searchResults"></div>
+</div>
 
 <div class="sheet" id="detail"><div class="panel" id="detailBody"></div></div>
 
@@ -408,17 +424,23 @@ function render(){
       const h = document.createElement("h3"); h.textContent = lbl; listEl.appendChild(h);
       grid = document.createElement("div"); grid.className="grid"; listEl.appendChild(grid);
     }
-    const s = it.show, b = document.createElement("button"); b.className="item";
-    const p = poster(s);
-    b.innerHTML = `${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}
-      <div class="t">${esc(s.title)}</div>
-      <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
-      <div class="badges">${Object.keys(it.added).map(k=>`<span class="b ${k}">${svcLabel(k)}</span>`).join("")}</div>`;
-    b.onclick = ()=>openDetail(id,it);
-    grid.appendChild(b);
+    grid.appendChild(card(id,it));
   }
   document.getElementById("btnMore").style.display = state.hasMore ? "" : "none";
   showUsage();
+}
+
+function card(id, it){
+  const s = it.show, b = document.createElement("button"); b.className="item";
+  const p = poster(s), keys = Object.keys(it.added);
+  b.innerHTML = `${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}
+    <div class="t">${esc(s.title)}</div>
+    <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
+    <div class="badges">${keys.length ? keys.map(k=>`<span class="b ${k}">${svcLabel(k)}</span>`).join("")
+      : it.search ? `<span class="m">${it.pending ? "Kollar…" : "Inte på dina tjänster"}</span>` : ""}</div>`;
+  if (it.search && !keys.length && !it.pending) b.classList.add("dim");
+  b.onclick = ()=>openDetail(id,it);
+  return b;
 }
 
 // Extra info till detaljvyn: svensk beskrivning, skådespelare, regissör/skapare och trailer.
@@ -456,7 +478,9 @@ function openDetail(id,it){
     <div class="pad">
       <h2>${esc(s.title)}</h2>
       <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${extra}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
-      <div class="m">Ny på ${esc(addedTxt)}</div>
+      <div class="m">${it.search
+        ? (Object.keys(it.added).length ? "Finns på "+esc(Object.keys(it.added).map(svcLabel).join(", ")) : "Finns inte på dina tjänster")
+        : "Ny på "+esc(addedTxt)}</div>
       <p id="overview">${esc((meta[s.tmdbId]?.sv) || s.overview || "")}</p>
       <div id="people" class="m">${s.cast?.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
       <div class="actions">
@@ -488,7 +512,11 @@ function openDetail(id,it){
 const TV = window.TvBridge || null;
 const tvCbs = {};
 window.__tvCb = (id, ok, data) => { const f = tvCbs[id]; delete tvCbs[id]; f && f(ok, data); };
-window.__tvBack = () => { const open = document.querySelector(".sheet.open"); if (open){ closeSheets(); return true; } return false; };
+window.__tvBack = () => {
+  if (document.querySelector(".sheet.open")){ closeSheets(); return true; }
+  if ($("searchView").classList.contains("open")){ closeSearch(); return true; }
+  return false;
+};
 function tvCall(method, ...args){
   return new Promise((res, rej) => {
     const id = "c" + Math.random().toString(36).slice(2);
@@ -607,6 +635,95 @@ function pair(host, name){
   }).catch(err => $("tvPair").innerHTML = `<p class="tip">${esc(err.message)}</p>`);
 }
 
+// ---------- Sök (TMDB) ----------
+const providerCache = {};   // tmdbId -> [tjänstnycklar]
+async function myServicesFor(tmdbId){
+  if (providerCache[tmdbId]) return providerCache[tmdbId];
+  const r = await tmdbGet(`/${tmdbId}/watch/providers`);
+  const se = r.results?.SE || {};
+  const names = [...(se.flatrate||[]), ...(se.free||[]), ...(se.ads||[])].map(p=>(p.provider_name||"").trim());
+  const keys = mine().filter(svc => names.some(n => svc.match.test(n))).map(svc=>svc.key);
+  return (providerCache[tmdbId] = keys);
+}
+
+function searchItem(x, type){
+  type = type || x.media_type;
+  const tmdbId = (type==="tv" ? "tv/" : "movie/") + x.id, date = x.release_date || x.first_air_date || "";
+  return { search:true, pending:true, added:{}, links:{}, approx:{}, show:{
+    showType: type==="tv" ? "series" : "movie", tmdbId, title: x.title || x.name,
+    overview: x.overview, releaseYear: type!=="tv" ? +date.slice(0,4) || undefined : undefined,
+    firstAirYear: type==="tv" ? +date.slice(0,4) || undefined : undefined,
+    rating: x.vote_count >= 5 ? Math.round(x.vote_average*10) : 0,
+    imageSet:{ verticalPoster: x.poster_path ? { w360:"https://image.tmdb.org/t/p/w342"+x.poster_path } : undefined,
+               horizontalBackdrop: x.backdrop_path ? { w720:"https://image.tmdb.org/t/p/w780"+x.backdrop_path } : undefined } } };
+}
+
+let searchSeq = 0;
+async function runSearch(q){
+  const seq = ++searchSeq, st = $("searchStatus"), out = $("searchResults");
+  if (q.length < 2){ out.innerHTML = ""; st.textContent = ""; return; }
+  if (!cfg.tmdbKey){ st.textContent = "Sökningen kräver en TMDB-nyckel under ⚙︎."; return; }
+  st.textContent = "Söker…"; st.style.display = "";
+  try{
+    const r = await tmdbGet("/search/multi", { query:q, language:"sv-SE", include_adult:"false", region:"SE" });
+    if (seq !== searchSeq) return;
+    const res = r.results || [];
+    const titles = res.filter(x=>x.media_type==="movie"||x.media_type==="tv").slice(0,12).map(x=>searchItem(x));
+    // Skådespelare: ta den mest relevanta personen och visa det hen medverkat i.
+    const person = res.find(x=>x.media_type==="person" && x.known_for_department==="Acting");
+    let credits = [];
+    if (person && (res.indexOf(person) < 3)){
+      const c = await tmdbGet(`/person/${person.id}/combined_credits`, { language:"sv-SE" });
+      if (seq !== searchSeq) return;
+      const seen = new Set();
+      credits = (c.cast||[]).filter(x=>(x.media_type==="movie"||x.media_type==="tv") && !seen.has(x.media_type+x.id) && seen.add(x.media_type+x.id))
+        .sort((a,b)=>(b.popularity||0)-(a.popularity||0)).slice(0,20).map(x=>searchItem(x));
+    }
+    const sections = [];
+    if (titles.length) sections.push({ title:"Titlar", items:titles });
+    if (credits.length) sections.push({ title:`Med ${person.name}`, items:credits, onlyMine:true });
+    if (!sections.length){ st.textContent = "Inga träffar."; out.innerHTML = ""; return; }
+    st.style.display = "none";
+    const draw = () => {
+      if (seq !== searchSeq) return;
+      out.innerHTML = "";
+      for (const sec of sections){
+        // Det som finns på dina tjänster först; för skådespelare visas bara det som finns där.
+        let items = [...sec.items].sort((a,b)=>(Object.keys(b.added).length>0)-(Object.keys(a.added).length>0));
+        if (sec.onlyMine) items = items.filter(it=>it.pending || Object.keys(it.added).length);
+        if (!items.length) continue;
+        const h = document.createElement("h3"); h.textContent = sec.title; out.appendChild(h);
+        const g = document.createElement("div"); g.className = "grid"; out.appendChild(g);
+        items.forEach(it => g.appendChild(card("tmdb:"+it.show.tmdbId, it)));
+      }
+      if (!out.children.length){ st.textContent = "Inget av det finns på dina tjänster."; st.style.display=""; }
+    };
+    draw();
+    await Promise.all(sections.flatMap(sec=>sec.items).map(async it => {
+      try{
+        for (const k of await myServicesFor(it.show.tmdbId)){
+          it.added[k] = 0; it.approx[k] = true;
+          it.links[k] = `https://www.themoviedb.org/${it.show.tmdbId}/watch?locale=SE`;
+        }
+      }catch{}
+      it.pending = false;
+    }));
+    draw();
+  }catch(e){ if (seq === searchSeq){ st.textContent = e.message; st.style.display=""; } }
+}
+
+function openSearch(){ $("searchView").classList.add("open"); setTimeout(()=>$("q").focus(), 50); }
+function closeSearch(){ $("searchView").classList.remove("open"); $("q").blur(); }
+let searchTimer;
+document.addEventListener("input", e => {
+  if (e.target.id !== "q") return;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(()=>runSearch(e.target.value.trim()), 350);
+});
+document.addEventListener("keydown", e => {
+  if (e.target.id === "q" && e.key === "Enter"){ clearTimeout(searchTimer); runSearch(e.target.value.trim()); e.target.blur(); }
+});
+
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
 document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
 
@@ -616,6 +733,8 @@ document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#typeChips [data-type]").forEach(x=>x.classList.toggle("on",x===b)); render(); });
 document.getElementById("btnHidden").onclick = e=>{ state.showHidden=!state.showHidden; e.target.classList.toggle("on",state.showHidden); render(); };
 document.getElementById("btnRefresh").onclick = ()=>load(true);
+document.getElementById("btnSearch").onclick = openSearch;
+document.getElementById("closeSearch").onclick = closeSearch;
 function updateYearBtn(){
   const b = document.getElementById("btnYear");
   b.textContent = `Från ${cfg.minYear}`; b.classList.toggle("on", cfg.yearOn);
