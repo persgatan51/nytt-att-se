@@ -43,6 +43,11 @@
   .searchbar{position:sticky;top:0;background:var(--bg);padding:12px 0 10px;z-index:2}
   .searchbar input{flex:1}
   .item.dim{opacity:.45}
+  .pwrap{position:relative}
+  .flag{position:absolute;top:6px;right:6px;background:rgba(15,17,21,.85);border-radius:999px;padding:2px 7px;font-size:13px}
+  .markrow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .markrow a{padding:10px 4px !important;font-size:14px}
+  .markrow a.on{background:var(--acc) !important;color:#111 !important;border-color:var(--acc) !important}
   .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}
   .sheet.open{display:flex}
   .panel{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--line);padding-bottom:calc(20px + env(safe-area-inset-bottom))}
@@ -85,6 +90,7 @@
     <button data-type="movie">Filmer</button>
     <button data-type="series">Serier</button>
     <button id="btnYear"></button>
+    <button id="btnWant">⭐ Vill se</button>
     <button id="btnHidden">Visa dolda</button>
   </div>
 </header>
@@ -180,7 +186,31 @@ let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
                           services:SERVICES.map(s=>s.key) }, store.get("cfg2",{}));
 // Standardåret ändrat från 2026 till 2025 (en gång, för den som hade det gamla standardvärdet).
 if (!store.get("migr2025", false)){ if (cfg.minYear === 2026) cfg.minYear = 2025; store.set("cfg2", cfg); store.set("migr2025", true); }
-let hidden = new Set(store.get("hidden",[]));
+// Markeringar per titel: "want" (vill se), "seen" (sett), "hidden" (borttagen).
+// Nyckel = TMDB-id när det finns (samma titel i lista, sökning och båda lägena).
+// En kopia av titeln sparas så att "Vill se"-listan kan visas även när titeln inte längre är ny.
+let marks = store.get("marks", null);
+if (!marks){   // flytta över gamla "dolda" titlar
+  marks = {};
+  for (const id of store.get("hidden",[])) marks[id] = { status:"hidden", t:Date.now() };
+  store.set("marks", marks);
+}
+const markKey = (id, it) => it.show.tmdbId || id;
+const markOf = (id, it) => (marks[markKey(id,it)] || marks[id] || {}).status || null;
+function snapshot(it){
+  const s = it.show;
+  return { show:{ showType:s.showType, tmdbId:s.tmdbId, title:s.title, overview:s.overview,
+                  releaseYear:s.releaseYear, firstAirYear:s.firstAirYear, rating:s.rating, imageSet:s.imageSet,
+                  runtime:s.runtime, seasonCount:s.seasonCount },
+           added:it.added, links:it.links, approx:it.approx, search:true };
+}
+function setMark(id, it, status){
+  const key = markKey(id, it);
+  delete marks[id];
+  if (!status || marks[key]?.status === status) delete marks[key];       // tryck igen = ångra
+  else marks[key] = { status, t:Date.now(), item:snapshot(it) };
+  store.set("marks", marks);
+}
 let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
 let state = { type:"all", svc:new Set(cfg.services), showHidden:false,
               shows:new Map(), cursor:null, hasMore:false };
@@ -408,11 +438,14 @@ function dayLabel(ts){
 // ---------- UI ----------
 function render(){
   const listEl = document.getElementById("list"), status = document.getElementById("status");
+  updateWantChip();
+  if (state.view === "want") return renderWant(listEl, status);
   let filteredOut = 0;
   const items = [...state.shows.entries()].filter(([id,it]) => {
       if (state.type!=="all" && it.show.showType!==state.type) return false;
       if (!Object.keys(it.added).some(k=>state.svc.has(k))) return false;
-      if (!state.showHidden && hidden.has(id)) return false;
+      const mk = markOf(id, it);
+      if (!state.showHidden && (mk === "seen" || mk === "hidden")) return false;
       if (cfg.yearOn && +year(it.show) && +year(it.show) < cfg.minYear) return false;
       if (excludedByLanguage(it.show)){ filteredOut++; return false; }
       return true; })
@@ -438,10 +471,37 @@ function render(){
   showUsage();
 }
 
+function renderWant(listEl, status){
+  const list = Object.entries(marks).filter(([,m]) => m.status === "want" && m.item)
+    .filter(([,m]) => state.type === "all" || m.item.show.showType === state.type)
+    .sort((a,b) => b[1].t - a[1].t);
+  listEl.innerHTML = "";
+  $("filterNote").textContent = ""; $("btnMore").style.display = "none";
+  status.style.display = list.length ? "none" : "";
+  status.textContent = "Inget sparat än. Öppna en titel och tryck på ⭐ Vill se.";
+  if (!list.length) return;
+  const h = document.createElement("h3"); h.textContent = `Vill se (${list.length})`; listEl.appendChild(h);
+  const g = document.createElement("div"); g.className = "grid"; listEl.appendChild(g);
+  for (const [key, m] of list){
+    // Använd färsk data om titeln finns i den aktuella listan, annars den sparade kopian.
+    const live = [...state.shows.entries()].find(([id,it]) => markKey(id,it) === key);
+    g.appendChild(live ? card(live[0], live[1]) : card(key, m.item));
+  }
+}
+
+function updateWantChip(){
+  const n = Object.values(marks).filter(m => m.status === "want").length;
+  const b = $("btnWant"); if (!b) return;
+  b.textContent = `⭐ Vill se${n ? " ("+n+")" : ""}`;
+  b.classList.toggle("on", state.view === "want");
+}
+
 function card(id, it){
   const s = it.show, b = document.createElement("button"); b.className="item";
   const p = poster(s), keys = Object.keys(it.added);
-  b.innerHTML = `${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}
+  const mk = markOf(id, it);
+  const flag = mk === "want" ? "⭐" : mk === "seen" ? "✓" : mk === "hidden" ? "🗑" : "";
+  b.innerHTML = `<div class="pwrap">${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}${flag ? `<span class="flag">${flag}</span>` : ""}</div>
     <div class="t">${esc(s.title)}</div>
     <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
     <div class="badges">${keys.length ? keys.map(k=>`<span class="b ${k}">${svcLabel(k)}</span>`).join("")
@@ -475,7 +535,7 @@ async function loadExtras(s){
 }
 
 function openDetail(id,it){
-  const s = it.show, isHidden = hidden.has(id), bd = backdrop(s);
+  const s = it.show, bd = backdrop(s), mk = markOf(id, it);
   const approx = it.approx || {};
   const buttons = Object.keys(it.added).map(k=> it.links[k]
     ? `<a class="${k}" href="${esc(it.links[k])}" target="_blank" rel="noopener">${approx[k] ? `Hitta på ${svcLabel(k)}` : `▶ Öppna i ${svcLabel(k)}`}</a>` : "").join("");
@@ -495,7 +555,11 @@ function openDetail(id,it){
         <span id="trailerSlot" style="display:contents"></span>
         ${tvButtons(it)}
         ${buttons}
-        <a href="#" id="toggleHide">${isHidden?"Visa igen":"Dölj (sedd / ointressant)"}</a>
+        <div class="markrow">
+          <a href="#" data-mark="want" class="${mk==="want"?"on":""}">⭐ Vill se</a>
+          <a href="#" data-mark="seen" class="${mk==="seen"?"on":""}">✓ Sett</a>
+          <a href="#" data-mark="hidden" class="${mk==="hidden"?"on":""}">🗑 Ta bort</a>
+        </div>
         <a href="#" id="closeDetail">Stäng</a>
       </div>
       <p class="tip">Titeln öppnas i tjänstens app. Tryck sedan på casta-ikonen för att spela på TV:n.${
@@ -503,8 +567,16 @@ function openDetail(id,it){
     </div>`;
   document.getElementById("detail").classList.add("open");
   document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeSheets(); };
-  document.getElementById("toggleHide").onclick = e=>{ e.preventDefault();
-    isHidden ? hidden.delete(id) : hidden.add(id); store.set("hidden",[...hidden]); closeSheets(); render(); };
+  document.querySelectorAll("#detailBody [data-mark]").forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const wasOn = a.classList.contains("on");
+    setMark(id, it, a.dataset.mark);
+    document.querySelectorAll("#detailBody [data-mark]").forEach(x => x.classList.toggle("on", x === a && !wasOn));
+    toast(wasOn ? "Markeringen borttagen" : { want:"Sparad i Vill se ⭐", seen:"Markerad som sedd ✓", hidden:"Borttagen från listan" }[a.dataset.mark]);
+    render();
+    if ($("searchView").classList.contains("open")) redrawSearch && redrawSearch();
+    if (!wasOn && a.dataset.mark !== "want") setTimeout(closeSheets, 400);
+  });
   loadExtras(s).then(ex=>{
     if (!ex || !document.getElementById("detail").classList.contains("open")) return;
     if (ex.sv) $("overview").textContent = ex.sv;
@@ -666,7 +738,7 @@ function searchItem(x, type){
                horizontalBackdrop: x.backdrop_path ? { w720:"https://image.tmdb.org/t/p/w780"+x.backdrop_path } : undefined } } };
 }
 
-let searchSeq = 0;
+let searchSeq = 0, redrawSearch = null;
 async function runSearch(q){
   const seq = ++searchSeq, st = $("searchStatus"), out = $("searchResults");
   if (q.length < 2){ out.innerHTML = ""; st.textContent = ""; return; }
@@ -706,7 +778,7 @@ async function runSearch(q){
       }
       if (!out.children.length){ st.textContent = "Inget av det finns på dina tjänster."; st.style.display=""; }
     };
-    draw();
+    draw(); redrawSearch = draw;
     await Promise.all(sections.flatMap(sec=>sec.items).map(async it => {
       try{
         for (const k of await myServicesFor(it.show.tmdbId)){
@@ -742,6 +814,7 @@ document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
 document.getElementById("btnHidden").onclick = e=>{ state.showHidden=!state.showHidden; e.target.classList.toggle("on",state.showHidden); render(); };
 document.getElementById("btnRefresh").onclick = ()=>load(true);
 document.getElementById("btnSearch").onclick = openSearch;
+document.getElementById("btnWant").onclick = () => { state.view = state.view === "want" ? "list" : "want"; render(); window.scrollTo(0,0); };
 document.getElementById("closeSearch").onclick = closeSearch;
 function updateYearBtn(){
   const b = document.getElementById("btnYear");
