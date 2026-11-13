@@ -47,6 +47,8 @@
   .tip{font-size:12px;color:var(--mut);margin-top:10px}
   input,select{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
   label{display:block;margin:12px 0 6px;color:var(--mut);font-size:13px}
+  label.chk{display:flex;align-items:center;gap:10px;margin:8px 0;color:var(--fg);font-size:15px}
+  label.chk input{width:20px;height:20px;accent-color:var(--acc)}
   a{color:var(--acc)}
 </style>
 </head>
@@ -70,6 +72,7 @@
   <div id="status" class="msg">Laddar…</div>
   <div id="list"></div>
   <button id="btnMore" class="more" style="display:none">Visa äldre</button>
+  <p class="tip" id="filterNote" style="text-align:center"></p>
   <p class="tip" id="usage" style="text-align:center"></p>
 </main>
 
@@ -88,6 +91,9 @@
   <label for="tmdbKey">TMDB-nyckel (valfri – ger svenska beskrivningar)</label>
   <input id="tmdbKey" autocomplete="off" spellcheck="false" placeholder="v3-nyckel eller Read Access Token">
   <p class="tip">Nycklarna sparas bara i den här webbläsaren.</p>
+  <label>Dölj filmer och serier från</label>
+  <div id="regionBoxes"></div>
+  <p class="tip">Bedöms på originalspråk och ursprungsland från TMDB (kräver TMDB-nyckeln).</p>
   <div class="actions">
     <a href="#" class="primary" id="saveSettings">Spara</a>
     <a href="#" id="closeSettings">Stäng</a>
@@ -103,14 +109,30 @@ const SERVICES = [
 ];
 const CACHE_HOURS = 6, PAGES_PER_LOAD = 3;
 
+// Regioner som kan filtreras bort. En titel räknas till regionen om originalspråket
+// hör dit, eller om alla ursprungsländer ligger där.
+const REGIONS = [
+  { key:"southasia", label:"Indien och Sydasien",
+    countries:["IN","PK","BD","LK","NP","BT","MV","AF"],
+    langs:["hi","ta","te","ml","kn","bn","mr","pa","gu","ur","or","as","si","ne"] },
+  { key:"eastasia", label:"Östasien (Kina, Japan, Korea m.fl.)",
+    countries:["CN","HK","TW","MO","JP","KR","KP","MN"],
+    langs:["zh","cn","ja","ko","mn"] },
+  { key:"seasia", label:"Sydostasien (Thailand, Filippinerna m.fl.)",
+    countries:["TH","VN","PH","ID","MY","SG","KH","MM","LA","BN","TL"],
+    langs:["th","vi","tl","id","ms","km","my","lo"] },
+];
+
 // ---------- lagring ----------
 const store = {
   get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{ return d; } },
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 };
 const oldCfg = store.get("cfg",{});
-let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "" }, store.get("cfg2",{}));
+let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
+                          exclude:["southasia","eastasia","seasia"] }, store.get("cfg2",{}));
 let hidden = new Set(store.get("hidden",[]));
+let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
 let state = { type:"all", svc:new Set(SERVICES.map(s=>s.key)), showHidden:false,
               shows:new Map(), cursor:null, hasMore:false };
 
@@ -183,7 +205,7 @@ async function load(force=false, more=false){
     const c = store.get("feed",null);
     if (c && Date.now()-c.t < CACHE_HOURS*36e5){
       state.shows = new Map(c.items); state.cursor = c.cursor; state.hasMore = c.hasMore;
-      render(); return;
+      await enrich(); render(); return;
     }
   }
   if (!more){ state.shows = new Map(); state.cursor = null; }
@@ -193,9 +215,44 @@ async function load(force=false, more=false){
       ingest(await fetchPage(state.cursor));
       if (!state.hasMore) break;
     }
-    saveCache(); render();
+    saveCache();
+    status.textContent = "Kollar ursprungsland…";
+    await enrich(); render();
   }catch(e){ status.textContent = e.message; status.style.display=""; }
   showUsage();
+}
+
+// ---------- TMDB: ursprungsland, originalspråk och svensk beskrivning ----------
+async function tmdbDetails(tmdbId){
+  const url = new URL("https://api.themoviedb.org/3/"+tmdbId);   // t.ex. "movie/27205" eller "tv/1399"
+  url.searchParams.set("language","sv-SE");
+  const headers = { accept:"application/json" }, k = cfg.tmdbKey.trim();
+  if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key",k);
+  const r = await fetch(url,{ headers });
+  if (r.status === 404) return { lang:null, countries:[], sv:null };
+  if (!r.ok) throw new Error("TMDB "+r.status);
+  const j = await r.json();
+  const countries = [...new Set([...(j.origin_country||[]), ...((j.production_countries||[]).map(c=>c.iso_3166_1))])];
+  return { lang:j.original_language || null, countries, sv:j.overview || null };
+}
+
+async function enrich(){
+  if (!cfg.tmdbKey) return;
+  const todo = [...new Set([...state.shows.values()].map(it=>it.show.tmdbId).filter(id=>id && !meta[id]))];
+  for (let i=0; i<todo.length; i+=8){
+    await Promise.all(todo.slice(i,i+8).map(id=>tmdbDetails(id).then(m=>{ meta[id]=m; }).catch(()=>{})));
+  }
+  if (todo.length) store.set("meta",meta);
+}
+
+function excludedRegion(show){
+  const m = meta[show.tmdbId]; if (!m) return null;
+  for (const r of REGIONS){
+    if (!cfg.exclude.includes(r.key)) continue;
+    if (m.lang && r.langs.includes(m.lang)) return r;
+    if (m.countries.length && m.countries.every(c=>r.countries.includes(c))) return r;
+  }
+  return null;
 }
 
 // ---------- hjälpfunktioner ----------
@@ -216,13 +273,20 @@ function dayLabel(ts){
 // ---------- UI ----------
 function render(){
   const listEl = document.getElementById("list"), status = document.getElementById("status");
-  const items = [...state.shows.entries()].filter(([id,it]) =>
-      (state.type==="all" || it.show.showType===state.type) &&
-      Object.keys(it.added).some(k=>state.svc.has(k)) &&
-      (state.showHidden || !hidden.has(id)))
+  let filteredOut = 0;
+  const items = [...state.shows.entries()].filter(([id,it]) => {
+      if (state.type!=="all" && it.show.showType!==state.type) return false;
+      if (!Object.keys(it.added).some(k=>state.svc.has(k))) return false;
+      if (!state.showHidden && hidden.has(id)) return false;
+      if (excludedRegion(it.show)){ filteredOut++; return false; }
+      return true; })
     .sort((a,b)=>latest(b[1])-latest(a[1]));
   status.style.display = items.length ? "none" : "";
   if (!items.length) status.textContent = "Inget nytt med de här filtren.";
+  const note = document.getElementById("filterNote");
+  note.textContent = !cfg.tmdbKey && cfg.exclude.length
+    ? "Lägg in en TMDB-nyckel under ⚙︎ för att kunna filtrera på ursprungsland."
+    : filteredOut ? `${filteredOut} titlar bortfiltrerade på ursprungsland` : "";
   listEl.innerHTML = "";
   let curLabel = null, grid = null;
   for (const [id,it] of items){
@@ -247,14 +311,9 @@ function render(){
 
 async function swedishOverview(s){
   if (!cfg.tmdbKey || !s.tmdbId) return null;
-  try{
-    const url = new URL("https://api.themoviedb.org/3/"+s.tmdbId);   // t.ex. "movie/27205" eller "tv/1399"
-    url.searchParams.set("language","sv-SE");
-    const headers = { accept:"application/json" }, k = cfg.tmdbKey.trim();
-    if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key",k);
-    const r = await fetch(url,{ headers }); if (!r.ok) return null;
-    const j = await r.json(); return j.overview || null;
-  }catch{ return null; }
+  if (meta[s.tmdbId]) return meta[s.tmdbId].sv;
+  try{ meta[s.tmdbId] = await tmdbDetails(s.tmdbId); store.set("meta",meta); return meta[s.tmdbId].sv; }
+  catch{ return null; }
 }
 
 function openDetail(id,it){
@@ -305,11 +364,16 @@ document.getElementById("btnMore").onclick = ()=>load(false,true);
 const $ = id => document.getElementById(id);
 $("btnSettings").onclick = ()=>{
   $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey;
+  $("regionBoxes").innerHTML = REGIONS.map(r=>`<label class="chk"><input type="checkbox" value="${r.key}" ${cfg.exclude.includes(r.key)?"checked":""}> ${r.label}</label>`).join("");
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
 $("saveSettings").onclick = e=>{ e.preventDefault();
-  cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim() };
-  store.set("cfg2",cfg); closeSheets(); load(true); };
+  const prev = cfg;
+  cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim(),
+          exclude:[...document.querySelectorAll("#regionBoxes input:checked")].map(x=>x.value) };
+  store.set("cfg2",cfg); closeSheets();
+  // Ladda om från API:t bara om nycklarna ändrats – annars räcker cachen (sparar anrop).
+  load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource); };
 
 load();
 </script>
