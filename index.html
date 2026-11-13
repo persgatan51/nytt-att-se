@@ -179,8 +179,10 @@ const store = {
 const oldCfg = store.get("cfg",{});
 let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
                           exclude:["southasia","eastasia","seasia"],
-                          minYear:2026, yearOn:true, source:"rapid",
+                          minYear:2025, yearOn:true, source:"rapid",
                           services:SERVICES.map(s=>s.key) }, store.get("cfg2",{}));
+// Standardåret ändrat från 2026 till 2025 (en gång, för den som hade det gamla standardvärdet).
+if (!store.get("migr2025", false)){ if (cfg.minYear === 2026) cfg.minYear = 2025; store.set("cfg2", cfg); store.set("migr2025", true); }
 let hidden = new Set(store.get("hidden",[]));
 let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
 let state = { type:"all", svc:new Set(cfg.services), showHidden:false,
@@ -301,11 +303,13 @@ async function tmdbGet(path, params={}){
 }
 
 async function loadTmdbServices(services){
-  // Hämta per kalenderår, annars fyller årets titlar alla sidor och äldre år syns aldrig.
-  // Årsfilter på: från filtrets år t.o.m. i år. Av: i år och de två föregående åren.
+  // Årsfilter på: hämta varje år från filtrets år t.o.m. i år för sig (annars fyller årets
+  // titlar alla sidor och tidigare år syns aldrig).
+  // Årsfilter av: i år (nyast först) + de populäraste titlarna från alla år.
   const iso = d=>d.toISOString().slice(0,10), today = iso(new Date()), thisYear = new Date().getFullYear();
-  const firstYear = Math.max(thisYear - 2, cfg.yearOn ? Math.min(cfg.minYear, thisYear) : thisYear - 2);
-  const years = []; for (let y = thisYear; y >= firstYear; y--) years.push(y);
+  const years = [];
+  if (cfg.yearOn){ for (let y = thisYear; y >= Math.max(Math.min(cfg.minYear, thisYear), thisYear - 4); y--) years.push(y); }
+  else years.push(thisYear, "alla");
   const providers = {};
   await Promise.all(["movie","tv"].map(async type=>{
     providers[type] = (await tmdbGet(`/watch/providers/${type}`, { watch_region:"SE" })).results || [];
@@ -316,13 +320,14 @@ async function loadTmdbServices(services){
     if (!ids.length) continue;
     const df = type==="movie" ? "primary_release_date" : "first_air_date";
     for (const y of years){
-      const pages = y === thisYear ? TMDB_PAGES : 2;
+      const pages = y === thisYear ? TMDB_PAGES : y === "alla" ? 3 : 2;
+      const range = y === "alla"
+        ? { sort_by:"popularity.desc", [df+".lte"]:today }
+        : { sort_by:df+".desc", [df+".gte"]:`${y}-01-01`, [df+".lte"]: y === thisYear ? today : `${y}-12-31` };
       for (let page=1; page<=pages; page++)
         jobs.push(() => tmdbGet(`/discover/${type}`, {
             watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"),
-            with_watch_monetization_types:"flatrate", sort_by:df+".desc",
-            [df+".gte"]:`${y}-01-01`, [df+".lte"]: y === thisYear ? today : `${y}-12-31`,
-            include_adult:"false", page })
+            with_watch_monetization_types:"flatrate", ...range, include_adult:"false", page })
           .then(r=>({ svc, type, list:r.results||[] })).catch(()=>({ svc, type, list:[] })));
     }
   }
