@@ -19,7 +19,8 @@
   button.on{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
   .chips{display:flex;gap:6px;overflow-x:auto;padding-top:8px;scrollbar-width:none}
   .chips button{white-space:nowrap}
-  main{padding:12px 14px 40px}
+  main{padding:4px 14px 40px}
+  h3{font-size:14px;color:var(--mut);margin:18px 0 8px;font-weight:600;text-transform:capitalize}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px}
   .item{background:none;border:0;border-radius:10px;padding:0;text-align:left}
   .item img,.ph{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:10px;background:var(--card);display:block}
@@ -30,6 +31,7 @@
   .b{font-size:10px;padding:1px 6px;border-radius:6px;font-weight:700}
   .b.netflix{background:#e50914;color:#fff}.b.prime{background:#00a8e1;color:#001}.b.hbo{background:#7b2cff;color:#fff}
   .msg{color:var(--mut);text-align:center;padding:30px 10px}
+  .more{display:block;margin:20px auto 0}
   .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}
   .sheet.open{display:flex}
   .panel{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--line);padding-bottom:calc(20px + env(safe-area-inset-bottom))}
@@ -43,7 +45,7 @@
   .actions a.prime{background:#00a8e1;border-color:#00a8e1;color:#001}
   .actions a.hbo{background:#7b2cff;border-color:#7b2cff}
   .tip{font-size:12px;color:var(--mut);margin-top:10px}
-  input{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+  input,select{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
   label{display:block;margin:12px 0 6px;color:var(--mut);font-size:13px}
   a{color:var(--acc)}
 </style>
@@ -52,12 +54,13 @@
 <header>
   <div class="row">
     <h1>Nytt att se</h1>
+    <button id="btnRefresh" aria-label="Uppdatera">↻</button>
     <button id="btnSettings" aria-label="Inställningar">⚙︎</button>
   </div>
   <div class="chips" id="typeChips">
     <button data-type="all" class="on">Alla</button>
     <button data-type="movie">Filmer</button>
-    <button data-type="tv">Serier</button>
+    <button data-type="series">Serier</button>
     <button id="btnHidden">Visa dolda</button>
   </div>
   <div class="chips" id="svcChips"></div>
@@ -65,20 +68,26 @@
 
 <main>
   <div id="status" class="msg">Laddar…</div>
-  <div id="grid" class="grid"></div>
+  <div id="list"></div>
+  <button id="btnMore" class="more" style="display:none">Visa äldre</button>
+  <p class="tip" id="usage" style="text-align:center"></p>
 </main>
 
 <div class="sheet" id="detail"><div class="panel" id="detailBody"></div></div>
 
 <div class="sheet" id="settings"><div class="panel"><div class="pad">
   <h2>Inställningar</h2>
-  <label for="key">TMDB API-nyckel (v3-nyckel eller v4 "Read Access Token")</label>
-  <input id="key" autocomplete="off" spellcheck="false" placeholder="Klistra in nyckeln här">
-  <p class="tip">Skaffa gratis på themoviedb.org → Inställningar → API. Nyckeln sparas bara i den här webbläsaren.</p>
-  <label for="days">Visa titlar släppta de senaste … dagarna</label>
-  <input id="days" type="number" min="7" max="730" value="180">
-  <label for="minVotes">Minsta antal röster på TMDB (filtrerar bort skräp)</label>
-  <input id="minVotes" type="number" min="0" max="1000" value="5">
+  <label for="saKey">Streaming Availability API-nyckel (krävs)</label>
+  <input id="saKey" autocomplete="off" spellcheck="false" placeholder="Klistra in nyckeln här">
+  <label for="saSource">Var kommer nyckeln ifrån?</label>
+  <select id="saSource">
+    <option value="rapid">RapidAPI (rapidapi.com)</option>
+    <option value="motn">Movie of the Night (developers.movieofthenight.com)</option>
+  </select>
+  <p class="tip">Gratisnivån räcker gott för privat bruk. Appen sparar svaren i några timmar för att spara anrop.</p>
+  <label for="tmdbKey">TMDB-nyckel (valfri – ger svenska beskrivningar)</label>
+  <input id="tmdbKey" autocomplete="off" spellcheck="false" placeholder="v3-nyckel eller Read Access Token">
+  <p class="tip">Nycklarna sparas bara i den här webbläsaren.</p>
   <div class="actions">
     <a href="#" class="primary" id="saveSettings">Spara</a>
     <a href="#" id="closeSettings">Stäng</a>
@@ -86,147 +95,199 @@
 </div></div></div>
 
 <script>
-const REGION = "SE", LANG = "sv-SE";
+const COUNTRY = "se";
 const SERVICES = [
-  { key:"netflix", label:"Netflix",     match:/^netflix$/i,
-    search:q=>`https://www.netflix.com/search?q=${encodeURIComponent(q)}` },
-  { key:"prime",   label:"Prime Video", match:/^amazon prime video$/i,
-    search:q=>`https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${encodeURIComponent(q)}` },
-  { key:"hbo",     label:"HBO Max",     match:/^(hbo max|max)$/i,
-    search:q=>`https://play.hbomax.com/search?q=${encodeURIComponent(q)}` },
+  { key:"netflix", label:"Netflix" },
+  { key:"prime",   label:"Prime Video" },
+  { key:"hbo",     label:"HBO Max" },
 ];
-const IMG = "https://image.tmdb.org/t/p/";
+const CACHE_HOURS = 6, PAGES_PER_LOAD = 3;
 
-// ---------- lagring (tål att localStorage saknas) ----------
+// ---------- lagring ----------
 const store = {
   get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{ return d; } },
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 };
-let cfg = Object.assign({ key:"", days:180, minVotes:5 }, store.get("cfg",{}));
+const oldCfg = store.get("cfg",{});
+let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "" }, store.get("cfg2",{}));
 let hidden = new Set(store.get("hidden",[]));
-let state = { type:"all", svc:new Set(SERVICES.map(s=>s.key)), showHidden:false, items:[] };
+let state = { type:"all", svc:new Set(SERVICES.map(s=>s.key)), showHidden:false,
+              shows:new Map(), cursor:null, hasMore:false };
 
-// ---------- TMDB ----------
-async function tmdb(path, params={}){
-  const url = new URL("https://api.themoviedb.org/3"+path);
-  const headers = { accept:"application/json" };
-  const k = cfg.key.trim();
-  if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key", k);
-  for (const [a,b] of Object.entries(params)) url.searchParams.set(a,b);
+// ---------- Streaming Availability API ----------
+function countCall(){
+  const today = new Date().toISOString().slice(0,10);
+  const u = store.get("usage",{ day:today, n:0 });
+  if (u.day !== today){ u.day = today; u.n = 0; }
+  u.n++; store.set("usage",u);
+}
+function showUsage(){
+  const u = store.get("usage",null), today = new Date().toISOString().slice(0,10);
+  document.getElementById("usage").textContent =
+    u && u.day===today ? `${u.n} anrop till Streaming Availability idag` : "";
+}
+
+async function sa(path, params){
+  const rapid = cfg.saSource !== "motn";
+  const url = new URL((rapid ? "https://streaming-availability.p.rapidapi.com" : "https://api.movieofthenight.com/v4") + path);
+  for (const [a,b] of Object.entries(params)) if (b!=null) url.searchParams.set(a,b);
+  const headers = rapid
+    ? { "X-RapidAPI-Key":cfg.saKey, "X-RapidAPI-Host":"streaming-availability.p.rapidapi.com" }
+    : { "X-API-Key":cfg.saKey };
+  countCall();
   const r = await fetch(url, { headers });
-  if (r.status === 401) throw new Error("Ogiltig API-nyckel – kontrollera under ⚙︎.");
-  if (!r.ok) throw new Error("TMDB svarade "+r.status);
+  if (r.status===401 || r.status===403) throw new Error("Nyckeln godtogs inte. Kontrollera nyckel och källa under ⚙︎.");
+  if (r.status===429) throw new Error("Dagens gratisanrop är slut. Försök igen i morgon.");
+  if (!r.ok) throw new Error("Streaming Availability svarade "+r.status);
   return r.json();
 }
 
-async function providerIds(){
-  const cached = store.get("prov",null);
-  if (cached && Date.now()-cached.t < 7*864e5) return cached.ids;
-  const ids = {};
-  for (const type of ["movie","tv"]){
-    const { results=[] } = await tmdb(`/watch/providers/${type}`, { watch_region:REGION, language:LANG });
-    for (const s of SERVICES){
-      const hit = results.filter(p=>s.match.test(p.provider_name.trim())).map(p=>p.provider_id);
-      ids[s.key] = ids[s.key] || {};
-      ids[s.key][type] = hit;
+async function fetchPage(cursor){
+  return sa("/changes", {
+    country: COUNTRY,
+    catalogs: SERVICES.map(s=>s.key+".subscription").join(","),
+    change_type: "new",
+    item_type: "show",
+    order_direction: "desc",
+    cursor
+  });
+}
+
+function ingest(res){
+  for (const c of res.changes || []){
+    const show = res.shows?.[c.showId]; if (!show) continue;
+    const svc = c.service?.id; if (!SERVICES.some(s=>s.key===svc)) continue;
+    const it = state.shows.get(c.showId) || { show, added:{}, links:{} };
+    it.show = show;
+    if (c.timestamp && (!it.added[svc] || c.timestamp > it.added[svc])) it.added[svc] = c.timestamp;
+    const opt = (show.streamingOptions?.[COUNTRY] || []).find(o=>o.service?.id===svc && o.type!=="rent" && o.type!=="buy");
+    it.links[svc] = opt?.videoLink || opt?.link || c.link || it.links[svc];
+    state.shows.set(c.showId, it);
+  }
+  state.cursor = res.nextCursor || null;
+  state.hasMore = !!res.hasMore;
+}
+
+function saveCache(){
+  store.set("feed",{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
+                     items:[...state.shows.entries()] });
+}
+
+async function load(force=false, more=false){
+  const status = document.getElementById("status");
+  if (!cfg.saKey){
+    status.innerHTML = 'Lägg in din Streaming Availability-nyckel under <b>⚙︎</b> för att komma igång.';
+    status.style.display=""; return;
+  }
+  if (!force && !more){
+    const c = store.get("feed",null);
+    if (c && Date.now()-c.t < CACHE_HOURS*36e5){
+      state.shows = new Map(c.items); state.cursor = c.cursor; state.hasMore = c.hasMore;
+      render(); return;
     }
   }
-  store.set("prov",{ t:Date.now(), ids });
-  return ids;
-}
-
-const iso = d => d.toISOString().slice(0,10);
-
-async function discover(type, provIds){
-  if (!provIds.length) return [];
-  const today = new Date(), from = new Date(Date.now()-cfg.days*864e5);
-  const dateField = type==="movie" ? "primary_release_date" : "first_air_date";
-  const base = {
-    watch_region:REGION, language:LANG,
-    with_watch_providers: provIds.join("|"),
-    with_watch_monetization_types:"flatrate",
-    sort_by: dateField+".desc",
-    [dateField+".gte"]: iso(from), [dateField+".lte"]: iso(today),
-    "vote_count.gte": cfg.minVotes, include_adult:"false"
-  };
-  const pages = await Promise.all([1,2].map(page=>tmdb(`/discover/${type}`, { ...base, page })));
-  return pages.flatMap(p=>p.results||[]);
-}
-
-async function load(){
-  const status = document.getElementById("status");
-  if (!cfg.key){ status.innerHTML = 'Lägg in din TMDB-nyckel under <b>⚙︎</b> för att komma igång.'; status.style.display=""; return; }
+  if (!more){ state.shows = new Map(); state.cursor = null; }
   status.textContent = "Hämtar nyheter…"; status.style.display="";
   try{
-    const ids = await providerIds();
-    const map = new Map();
-    const jobs = [];
-    for (const s of SERVICES) for (const type of ["movie","tv"])
-      jobs.push(discover(type, ids[s.key]?.[type]||[]).then(list=>list.forEach(x=>{
-        const id = type+":"+x.id;
-        const it = map.get(id) || { ...x, type, uid:id, services:new Set() };
-        it.services.add(s.key); map.set(id,it);
-      })));
-    await Promise.all(jobs);
-    state.items = [...map.values()].sort((a,b)=>date(b).localeCompare(date(a)));
-    render();
-  }catch(e){ status.textContent = e.message; }
+    for (let i=0; i<PAGES_PER_LOAD; i++){
+      ingest(await fetchPage(state.cursor));
+      if (!state.hasMore) break;
+    }
+    saveCache(); render();
+  }catch(e){ status.textContent = e.message; status.style.display=""; }
+  showUsage();
 }
 
-const date = x => x.release_date || x.first_air_date || "";
-const title = x => x.title || x.name || "";
+// ---------- hjälpfunktioner ----------
+const latest = it => Math.max(0, ...Object.entries(it.added).filter(([k])=>state.svc.has(k)).map(([,v])=>v));
+const year = s => s.releaseYear || s.firstAirYear || "";
+const poster = s => s.imageSet?.verticalPoster?.w360 || s.imageSet?.verticalPoster?.w240 || "";
+const backdrop = s => s.imageSet?.horizontalBackdrop?.w720 || s.imageSet?.horizontalPoster?.w720 || "";
+const svcLabel = k => SERVICES.find(s=>s.key===k)?.label || k;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtDay = ts => new Date(ts*1000).toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" });
+function dayLabel(ts){
+  const d = new Date(ts*1000); d.setHours(0,0,0,0);
+  const t = new Date(); t.setHours(0,0,0,0);
+  const diff = Math.round((t-d)/864e5);
+  return diff===0 ? "Idag" : diff===1 ? "Igår" : fmtDay(ts);
+}
 
 // ---------- UI ----------
 function render(){
-  const grid = document.getElementById("grid"), status = document.getElementById("status");
-  const list = state.items.filter(x =>
-    (state.type==="all" || x.type===state.type) &&
-    [...x.services].some(s=>state.svc.has(s)) &&
-    (state.showHidden || !hidden.has(x.uid)));
-  status.style.display = list.length ? "none" : "";
-  if (!list.length) status.textContent = "Inget nytt med de här filtren.";
-  grid.innerHTML = "";
-  for (const x of list){
-    const b = document.createElement("button"); b.className="item";
-    const poster = x.poster_path ? `<img loading="lazy" alt="" src="${IMG}w342${x.poster_path}">` : `<div class="ph">${esc(title(x))}</div>`;
-    b.innerHTML = `${poster}<div class="t">${esc(title(x))}</div>
-      <div class="m">${x.type==="tv"?"Serie":"Film"} · ${date(x).slice(0,4)}${x.vote_average?` · ★ ${x.vote_average.toFixed(1)}`:""}</div>
-      <div class="badges">${[...x.services].map(s=>`<span class="b ${s}">${SERVICES.find(z=>z.key===s).label}</span>`).join("")}</div>`;
-    b.onclick = ()=>openDetail(x);
+  const listEl = document.getElementById("list"), status = document.getElementById("status");
+  const items = [...state.shows.entries()].filter(([id,it]) =>
+      (state.type==="all" || it.show.showType===state.type) &&
+      Object.keys(it.added).some(k=>state.svc.has(k)) &&
+      (state.showHidden || !hidden.has(id)))
+    .sort((a,b)=>latest(b[1])-latest(a[1]));
+  status.style.display = items.length ? "none" : "";
+  if (!items.length) status.textContent = "Inget nytt med de här filtren.";
+  listEl.innerHTML = "";
+  let curLabel = null, grid = null;
+  for (const [id,it] of items){
+    const lbl = dayLabel(latest(it));
+    if (lbl !== curLabel){
+      curLabel = lbl;
+      const h = document.createElement("h3"); h.textContent = lbl; listEl.appendChild(h);
+      grid = document.createElement("div"); grid.className="grid"; listEl.appendChild(grid);
+    }
+    const s = it.show, b = document.createElement("button"); b.className="item";
+    const p = poster(s);
+    b.innerHTML = `${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}
+      <div class="t">${esc(s.title)}</div>
+      <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
+      <div class="badges">${Object.keys(it.added).map(k=>`<span class="b ${k}">${svcLabel(k)}</span>`).join("")}</div>`;
+    b.onclick = ()=>openDetail(id,it);
     grid.appendChild(b);
   }
+  document.getElementById("btnMore").style.display = state.hasMore ? "" : "none";
+  showUsage();
 }
 
-function openDetail(x){
-  const watchUrl = `https://www.themoviedb.org/${x.type}/${x.id}/watch?locale=${REGION}`;
-  const svcLinks = [...x.services].map(k=>{ const s=SERVICES.find(z=>z.key===k);
-    return `<a class="${k}" href="${s.search(title(x))}" target="_blank" rel="noopener">Sök i ${s.label}</a>`; }).join("");
-  const isHidden = hidden.has(x.uid);
+async function swedishOverview(s){
+  if (!cfg.tmdbKey || !s.tmdbId) return null;
+  try{
+    const url = new URL("https://api.themoviedb.org/3/"+s.tmdbId);   // t.ex. "movie/27205" eller "tv/1399"
+    url.searchParams.set("language","sv-SE");
+    const headers = { accept:"application/json" }, k = cfg.tmdbKey.trim();
+    if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key",k);
+    const r = await fetch(url,{ headers }); if (!r.ok) return null;
+    const j = await r.json(); return j.overview || null;
+  }catch{ return null; }
+}
+
+function openDetail(id,it){
+  const s = it.show, isHidden = hidden.has(id), bd = backdrop(s);
+  const buttons = Object.keys(it.added).map(k=> it.links[k]
+    ? `<a class="${k}" href="${esc(it.links[k])}" target="_blank" rel="noopener">▶ Öppna i ${svcLabel(k)}</a>` : "").join("");
+  const addedTxt = Object.entries(it.added).map(([k,ts])=>`${svcLabel(k)} ${new Date(ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"short"})}`).join(" · ");
+  const extra = s.showType==="series" ? (s.seasonCount?` · ${s.seasonCount} säsonger`:"") : (s.runtime?` · ${s.runtime} min`:"");
   document.getElementById("detailBody").innerHTML = `
-    ${x.backdrop_path ? `<img class="hero" alt="" src="${IMG}w780${x.backdrop_path}">` : ""}
+    ${bd ? `<img class="hero" alt="" src="${esc(bd)}">` : ""}
     <div class="pad">
-      <h2>${esc(title(x))}</h2>
-      <div class="m">${x.type==="tv"?"Serie":"Film"} · ${date(x)}${x.vote_average?` · ★ ${x.vote_average.toFixed(1)} (${x.vote_count})`:""}</div>
-      <p>${esc(x.overview || "Ingen beskrivning på svenska.")}</p>
+      <h2>${esc(s.title)}</h2>
+      <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${extra}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
+      <div class="m">Ny på ${esc(addedTxt)}</div>
+      <p id="overview">${esc(s.overview || "")}</p>
       <div class="actions">
-        <a class="primary" href="${watchUrl}" target="_blank" rel="noopener">▶ Öppna titeln i streamingappen</a>
-        ${svcLinks}
+        ${buttons}
         <a href="#" id="toggleHide">${isHidden?"Visa igen":"Dölj (sedd / ointressant)"}</a>
         <a href="#" id="closeDetail">Stäng</a>
       </div>
-      <p class="tip">"Öppna titeln" visar var den går att se. Tryck på tjänsten där, så öppnas titeln i appen. Tryck sedan på casta-ikonen för att spela på TV:n.</p>
+      <p class="tip">Titeln öppnas i tjänstens app. Tryck sedan på casta-ikonen för att spela på TV:n.</p>
     </div>`;
   document.getElementById("detail").classList.add("open");
   document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeSheets(); };
   document.getElementById("toggleHide").onclick = e=>{ e.preventDefault();
-    isHidden ? hidden.delete(x.uid) : hidden.add(x.uid); store.set("hidden",[...hidden]); closeSheets(); render(); };
+    isHidden ? hidden.delete(id) : hidden.add(id); store.set("hidden",[...hidden]); closeSheets(); render(); };
+  swedishOverview(s).then(sv=>{ const el=document.getElementById("overview"); if (sv && el) el.textContent = sv; });
 }
 
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
 document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
-const esc = s => String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-// filter-chips
+// filter
 const svcChips = document.getElementById("svcChips");
 for (const s of SERVICES){
   const b = document.createElement("button"); b.textContent = s.label; b.className="on";
@@ -237,15 +298,18 @@ document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
   state.type=b.dataset.type;
   document.querySelectorAll("#typeChips [data-type]").forEach(x=>x.classList.toggle("on",x===b)); render(); });
 document.getElementById("btnHidden").onclick = e=>{ state.showHidden=!state.showHidden; e.target.classList.toggle("on",state.showHidden); render(); };
+document.getElementById("btnRefresh").onclick = ()=>load(true);
+document.getElementById("btnMore").onclick = ()=>load(false,true);
 
 // inställningar
-document.getElementById("btnSettings").onclick = ()=>{
-  key.value=cfg.key; days.value=cfg.days; minVotes.value=cfg.minVotes;
-  document.getElementById("settings").classList.add("open"); };
-document.getElementById("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
-document.getElementById("saveSettings").onclick = e=>{ e.preventDefault();
-  cfg = { key:key.value.trim(), days:+days.value||180, minVotes:+minVotes.value||0 };
-  store.set("cfg",cfg); store.set("prov",null); closeSheets(); load(); };
+const $ = id => document.getElementById(id);
+$("btnSettings").onclick = ()=>{
+  $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey;
+  $("settings").classList.add("open"); };
+$("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
+$("saveSettings").onclick = e=>{ e.preventDefault();
+  cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim() };
+  store.set("cfg2",cfg); closeSheets(); load(true); };
 
 load();
 </script>

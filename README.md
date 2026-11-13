@@ -1,5 +1,8 @@
 # Nytt att se
 
-Webbapp som visar nya filmer och serier på Netflix, Prime Video och HBO Max i Sverige (data från TMDB).
+Webbapp som visar vad som nyss lagts upp på Netflix, Prime Video och HBO Max i Sverige, med datum och direktlänk till titeln i tjänsten.
 
-Öppna sidan, tryck på ⚙︎ och klistra in din TMDB-nyckel. Nyckeln sparas bara i webbläsaren.
+- Nyheter, datum och länkar: Streaming Availability API (Movie of the Night), gratisnivå.
+- Svenska beskrivningar (valfritt): TMDB.
+
+Öppna sidan, tryck på ⚙︎ och klistra in nycklarna. De sparas bara i webbläsaren.
