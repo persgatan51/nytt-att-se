@@ -45,6 +45,9 @@
   .pad h2{margin:0 0 4px;font-size:20px}
   .actions{display:flex;flex-direction:column;gap:8px;margin-top:14px}
   .actions a{display:block;text-align:center;padding:12px;border-radius:12px;text-decoration:none;color:#fff;font-weight:600;background:var(--card);border:1px solid var(--line)}
+  .actions a.trailer{background:#2a2f3a;border-color:#3a4150}
+  #people{margin-top:8px;line-height:1.5}
+  #people b{color:var(--fg);font-weight:600}
   .actions a.primary{background:var(--acc);color:#111;border-color:var(--acc)}
   .actions a.netflix{background:#e50914;border-color:#e50914}
   .actions a.prime{background:#00a8e1;border-color:#00a8e1;color:#001}
@@ -412,11 +415,27 @@ function render(){
   showUsage();
 }
 
-async function swedishOverview(s){
+// Extra info till detaljvyn: svensk beskrivning, skådespelare, regissör/skapare och trailer.
+// Hämtas från TMDB när man öppnar en titel (ett anrop) och sparas för sessionen.
+const extrasCache = {};
+async function loadExtras(s){
   if (!cfg.tmdbKey || !s.tmdbId) return null;
-  if (meta[s.tmdbId]) return meta[s.tmdbId].sv;
-  try{ meta[s.tmdbId] = await tmdbDetails(s.tmdbId); store.set("meta",meta); return meta[s.tmdbId].sv; }
-  catch{ return null; }
+  if (extrasCache[s.tmdbId]) return extrasCache[s.tmdbId];
+  try{
+    const j = await tmdbGet("/"+s.tmdbId, { language:"sv-SE", append_to_response:"credits,videos",
+                                           include_video_language:"sv,en,null" });
+    const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ name:c.name, role:c.character }));
+    const makers = s.tmdbId.startsWith("movie/")
+      ? (j.credits?.crew || []).filter(c=>c.job==="Director").map(c=>c.name)
+      : (j.created_by || []).map(c=>c.name);
+    const vids = (j.videos?.results || []).filter(v=>v.site==="YouTube" && v.key);
+    const score = v => (v.type==="Trailer"?4:v.type==="Teaser"?2:0) + (v.official?1:0) + (v.iso_639_1==="sv"?0.5:0);
+    const best = vids.sort((a,b)=>score(b)-score(a))[0];
+    const ex = { sv:j.overview || null, cast, makers,
+                 trailer: best && (best.type==="Trailer" || best.type==="Teaser") ? "https://www.youtube.com/watch?v="+best.key : null };
+    extrasCache[s.tmdbId] = ex;
+    return ex;
+  }catch{ return null; }
 }
 
 function openDetail(id,it){
@@ -432,8 +451,10 @@ function openDetail(id,it){
       <h2>${esc(s.title)}</h2>
       <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${extra}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
       <div class="m">Ny på ${esc(addedTxt)}</div>
-      <p id="overview">${esc(s.overview || "")}</p>
+      <p id="overview">${esc((meta[s.tmdbId]?.sv) || s.overview || "")}</p>
+      <div id="people" class="m">${s.cast?.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
       <div class="actions">
+        <span id="trailerSlot" style="display:contents"></span>
         ${buttons}
         <a href="#" id="toggleHide">${isHidden?"Visa igen":"Dölj (sedd / ointressant)"}</a>
         <a href="#" id="closeDetail">Stäng</a>
@@ -445,7 +466,15 @@ function openDetail(id,it){
   document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeSheets(); };
   document.getElementById("toggleHide").onclick = e=>{ e.preventDefault();
     isHidden ? hidden.delete(id) : hidden.add(id); store.set("hidden",[...hidden]); closeSheets(); render(); };
-  swedishOverview(s).then(sv=>{ const el=document.getElementById("overview"); if (sv && el) el.textContent = sv; });
+  loadExtras(s).then(ex=>{
+    if (!ex || !document.getElementById("detail").classList.contains("open")) return;
+    if (ex.sv) $("overview").textContent = ex.sv;
+    const ppl = [];
+    if (ex.makers.length) ppl.push(`<div><b>${s.showType==="series"?"Skapad av":"Regi"}:</b> ${esc(ex.makers.join(", "))}</div>`);
+    if (ex.cast.length) ppl.push(`<div><b>Skådespelare:</b> ${ex.cast.map(c=>esc(c.name)+(c.role?` <span style="opacity:.7">(${esc(c.role)})</span>`:"")).join(", ")}</div>`);
+    if (ppl.length) $("people").innerHTML = ppl.join("");
+    if (ex.trailer) $("trailerSlot").innerHTML = `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
+  });
 }
 
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
