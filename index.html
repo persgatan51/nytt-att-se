@@ -67,6 +67,7 @@
   input,select{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
   label{display:block;margin:12px 0 6px;color:var(--mut);font-size:13px}
   label.chk{display:flex;align-items:center;gap:10px;margin:8px 0;color:var(--fg);font-size:15px}
+  .langgrid{display:grid;grid-template-columns:1fr 1fr;column-gap:10px}
   label.chk input{width:20px;height:20px;accent-color:var(--acc)}
   a{color:var(--acc)}
 </style>
@@ -130,9 +131,9 @@
   <div id="serviceBoxes"></div>
   <label for="minYear">Visa bara titlar utgivna från och med år (slås av/på med knappen i listan)</label>
   <input id="minYear" type="number" min="1900" max="2100">
-  <label>Dölj filmer och serier från</label>
-  <div id="regionBoxes"></div>
-  <p class="tip">Bedöms på originalspråk och ursprungsland från TMDB (kräver TMDB-nyckeln).</p>
+  <label class="chk" style="margin-top:16px"><input type="checkbox" id="langOn"> Visa bara titlar med originalspråk:</label>
+  <div id="langBoxes" class="langgrid"></div>
+  <p class="tip">Originalspråket kommer från TMDB (kräver TMDB-nyckeln). Gäller listan, inte sökningen.</p>
   <div class="actions">
     <a href="#" class="primary" id="saveSettings">Spara</a>
     <a href="#" id="closeSettings">Stäng</a>
@@ -157,19 +158,15 @@ const mine = () => SERVICES.filter(s=>cfg.services.includes(s.key));
 const mySa = () => mine().filter(s=>s.src==="sa");
 const CACHE_HOURS = 6, PAGES_PER_LOAD = 5, TMDB_PAGES = 3;
 
-// Regioner som kan filtreras bort. En titel räknas till regionen om originalspråket
-// hör dit, eller om alla ursprungsländer ligger där.
-const REGIONS = [
-  { key:"southasia", label:"Indien och Sydasien",
-    countries:["IN","PK","BD","LK","NP","BT","MV","AF"],
-    langs:["hi","ta","te","ml","kn","bn","mr","pa","gu","ur","or","as","si","ne"] },
-  { key:"eastasia", label:"Östasien (Kina, Japan, Korea m.fl.)",
-    countries:["CN","HK","TW","MO","JP","KR","KP","MN"],
-    langs:["zh","cn","ja","ko","mn"] },
-  { key:"seasia", label:"Sydostasien (Thailand, Filippinerna m.fl.)",
-    countries:["TH","VN","PH","ID","MY","SG","KH","MM","LA","BN","TL"],
-    langs:["th","vi","tl","id","ms","km","my","lo"] },
+// Originalspråk som kan väljas. Titlar på andra språk döljs när språkfiltret är på.
+// TMDB använder "no" för norska (ibland "nb"/"nn").
+const LANGS = [
+  { code:"en", label:"Engelska" }, { code:"sv", label:"Svenska" }, { code:"da", label:"Danska" },
+  { code:"no", label:"Norska", alias:["nb","nn"] }, { code:"es", label:"Spanska" }, { code:"fr", label:"Franska" },
+  { code:"de", label:"Tyska" }, { code:"it", label:"Italienska" }, { code:"fi", label:"Finska" },
+  { code:"is", label:"Isländska" }, { code:"nl", label:"Nederländska" }, { code:"pt", label:"Portugisiska" },
 ];
+const allowedLangCodes = () => LANGS.filter(l=>cfg.langs.includes(l.code)).flatMap(l=>[l.code, ...(l.alias||[])]);
 
 // ---------- lagring ----------
 const store = {
@@ -178,7 +175,7 @@ const store = {
 };
 const oldCfg = store.get("cfg",{});
 let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
-                          exclude:["southasia","eastasia","seasia"],
+                          langs:["en","sv","da","no","es","fr"], langOn:true,
                           minYear:2025, yearOn:true, source:"rapid",
                           services:SERVICES.map(s=>s.key) }, store.get("cfg2",{}));
 // Standardåret ändrat från 2026 till 2025 (en gång, för den som hade det gamla standardvärdet).
@@ -245,7 +242,7 @@ function ingest(res){
 }
 
 const feedKey = () => ["feed4", cfg.source, cfg.services.join(","),
-  cfg.source==="tmdb" ? (cfg.yearOn ? cfg.minYear : "ar") : ""].join("|");
+  cfg.source==="tmdb" ? (cfg.yearOn ? cfg.minYear : "ar") + (cfg.langOn ? cfg.langs.join("") : "alla") : ""].join("|");
 function saveCache(){
   store.set(feedKey(),{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
                      items:[...state.shows.entries()] });
@@ -327,7 +324,8 @@ async function loadTmdbServices(services){
       for (let page=1; page<=pages; page++)
         jobs.push(() => tmdbGet(`/discover/${type}`, {
             watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"),
-            with_watch_monetization_types:"flatrate", ...range, include_adult:"false", page })
+            with_watch_monetization_types:"flatrate", ...range, include_adult:"false", page,
+            ...(cfg.langOn && cfg.langs.length ? { with_original_language: allowedLangCodes().join("|") } : {}) })
           .then(r=>({ svc, type, list:r.results||[] })).catch(()=>({ svc, type, list:[] })));
     }
   }
@@ -385,14 +383,11 @@ async function enrich(){
   if (todo.length) store.set("meta",meta);
 }
 
-function excludedRegion(show){
-  const m = meta[show.tmdbId]; if (!m) return null;
-  for (const r of REGIONS){
-    if (!cfg.exclude.includes(r.key)) continue;
-    if (m.lang && r.langs.includes(m.lang)) return r;
-    if (m.countries.length && m.countries.every(c=>r.countries.includes(c))) return r;
-  }
-  return null;
+function excludedByLanguage(show){
+  if (!cfg.langOn) return false;
+  const m = meta[show.tmdbId];
+  if (!m || !m.lang) return false;            // okänt språk: visa hellre än göm
+  return !allowedLangCodes().includes(m.lang);
 }
 
 // ---------- hjälpfunktioner ----------
@@ -419,15 +414,15 @@ function render(){
       if (!Object.keys(it.added).some(k=>state.svc.has(k))) return false;
       if (!state.showHidden && hidden.has(id)) return false;
       if (cfg.yearOn && +year(it.show) && +year(it.show) < cfg.minYear) return false;
-      if (excludedRegion(it.show)){ filteredOut++; return false; }
+      if (excludedByLanguage(it.show)){ filteredOut++; return false; }
       return true; })
     .sort((a,b)=>latest(b[1])-latest(a[1]));
   status.style.display = items.length ? "none" : "";
   if (!items.length) status.textContent = "Inget nytt med de här filtren.";
   const note = document.getElementById("filterNote");
-  note.textContent = !cfg.tmdbKey && cfg.exclude.length
-    ? "Lägg in en TMDB-nyckel under ⚙︎ för att kunna filtrera på ursprungsland."
-    : filteredOut ? `${filteredOut} titlar bortfiltrerade på ursprungsland` : "";
+  note.textContent = !cfg.tmdbKey && cfg.langOn
+    ? "Lägg in en TMDB-nyckel under ⚙︎ för att kunna filtrera på språk."
+    : filteredOut ? `${filteredOut} titlar dolda av språkfiltret` : "";
   listEl.innerHTML = "";
   let curLabel = null, grid = null;
   for (const [id,it] of items){
@@ -762,14 +757,16 @@ const $ = id => document.getElementById(id);
 $("btnSettings").onclick = ()=>{
   $("source").value=cfg.source; $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("minYear").value=cfg.minYear;
   $("serviceBoxes").innerHTML = SERVICES.map(s=>`<label class="chk"><input type="checkbox" value="${s.key}" ${cfg.services.includes(s.key)?"checked":""}> ${s.label}</label>`).join("");
-  $("regionBoxes").innerHTML = REGIONS.map(r=>`<label class="chk"><input type="checkbox" value="${r.key}" ${cfg.exclude.includes(r.key)?"checked":""}> ${r.label}</label>`).join("");
+  $("langOn").checked = cfg.langOn;
+  $("langBoxes").innerHTML = LANGS.map(l=>`<label class="chk"><input type="checkbox" value="${l.code}" ${cfg.langs.includes(l.code)?"checked":""}> ${l.label}</label>`).join("");
   renderTvSection();
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
 $("saveSettings").onclick = e=>{ e.preventDefault();
   const prev = cfg;
   cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim(),
-          exclude:[...document.querySelectorAll("#regionBoxes input:checked")].map(x=>x.value),
+          langOn: $("langOn").checked,
+          langs:[...document.querySelectorAll("#langBoxes input:checked")].map(x=>x.value),
           services:[...document.querySelectorAll("#serviceBoxes input:checked")].map(x=>x.value),
           minYear: +$("minYear").value || prev.minYear, yearOn: prev.yearOn, source: $("source").value };
   store.set("cfg2",cfg); state.svc = new Set(cfg.services); closeSheets(); updateYearBtn();
