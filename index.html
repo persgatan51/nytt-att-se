@@ -301,10 +301,11 @@ async function tmdbGet(path, params={}){
 }
 
 async function loadTmdbServices(services){
-  // Fönster: från 1 jan årsfiltrets år (om på), annars ett år bakåt. TMDB har ingen dygnsgräns,
-  // så vi hämtar flera sidor per tjänst – parallellt för att det ska gå fort.
-  const iso = d=>d.toISOString().slice(0,10), today = iso(new Date());
-  const from = cfg.yearOn ? `${cfg.minYear}-01-01` : iso(new Date(Date.now()-365*864e5));
+  // Hämta per kalenderår, annars fyller årets titlar alla sidor och äldre år syns aldrig.
+  // Årsfilter på: från filtrets år t.o.m. i år. Av: i år och de två föregående åren.
+  const iso = d=>d.toISOString().slice(0,10), today = iso(new Date()), thisYear = new Date().getFullYear();
+  const firstYear = Math.max(thisYear - 2, cfg.yearOn ? Math.min(cfg.minYear, thisYear) : thisYear - 2);
+  const years = []; for (let y = thisYear; y >= firstYear; y--) years.push(y);
   const providers = {};
   await Promise.all(["movie","tv"].map(async type=>{
     providers[type] = (await tmdbGet(`/watch/providers/${type}`, { watch_region:"SE" })).results || [];
@@ -314,14 +315,21 @@ async function loadTmdbServices(services){
     const ids = providers[type].filter(p=>svc.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
     if (!ids.length) continue;
     const df = type==="movie" ? "primary_release_date" : "first_air_date";
-    for (let page=1; page<=TMDB_PAGES; page++)
-      jobs.push(tmdbGet(`/discover/${type}`, {
-          watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"),
-          with_watch_monetization_types:"flatrate", sort_by:df+".desc",
-          [df+".gte"]:from, [df+".lte"]:today, include_adult:"false", page })
-        .then(r=>({ svc, type, list:r.results||[] })).catch(()=>({ svc, type, list:[] })));
+    for (const y of years){
+      const pages = y === thisYear ? TMDB_PAGES : 2;
+      for (let page=1; page<=pages; page++)
+        jobs.push(() => tmdbGet(`/discover/${type}`, {
+            watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"),
+            with_watch_monetization_types:"flatrate", sort_by:df+".desc",
+            [df+".gte"]:`${y}-01-01`, [df+".lte"]: y === thisYear ? today : `${y}-12-31`,
+            include_adult:"false", page })
+          .then(r=>({ svc, type, list:r.results||[] })).catch(()=>({ svc, type, list:[] })));
+    }
   }
-  for (const { svc, type, list } of await Promise.all(jobs)){
+  // Högst 12 anrop åt gången, så att vi inte slår i TMDB:s hastighetsgräns.
+  const results = [];
+  for (let i = 0; i < jobs.length; i += 12) results.push(...await Promise.all(jobs.slice(i, i+12).map(f=>f())));
+  for (const { svc, type, list } of results){
     for (const x of list){
       const tmdbId = type+"/"+x.id, date = x.release_date || x.first_air_date;
       if (!date) continue;
