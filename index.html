@@ -71,7 +71,6 @@
     <button id="btnYear"></button>
     <button id="btnHidden">Visa dolda</button>
   </div>
-  <div class="chips" id="svcChips"></div>
 </header>
 
 <main>
@@ -102,6 +101,8 @@
   <label for="tmdbKey">TMDB-nyckel (krävs för "Bara TMDB", Viaplay, landfilter och svenska beskrivningar)</label>
   <input id="tmdbKey" autocomplete="off" spellcheck="false" placeholder="v3-nyckel eller Read Access Token">
   <p class="tip">Nycklarna sparas bara i den här webbläsaren.</p>
+  <label>Mina streamingtjänster</label>
+  <div id="serviceBoxes"></div>
   <label for="minYear">Visa bara titlar utgivna från och med år (slås av/på med knappen i listan)</label>
   <input id="minYear" type="number" min="1900" max="2100">
   <label>Dölj filmer och serier från</label>
@@ -127,7 +128,9 @@ const SERVICES = [
   { key:"viaplay",     label:"Viaplay",     src:"tmdb", match:/^viaplay$/i },
 ];
 const SA_SERVICES = SERVICES.filter(s=>s.src==="sa");
-const CACHE_HOURS = 6, PAGES_PER_LOAD = 5, TMDB_DAYS = 120;
+const mine = () => SERVICES.filter(s=>cfg.services.includes(s.key));
+const mySa = () => mine().filter(s=>s.src==="sa");
+const CACHE_HOURS = 6, PAGES_PER_LOAD = 5, TMDB_PAGES = 3;
 
 // Regioner som kan filtreras bort. En titel räknas till regionen om originalspråket
 // hör dit, eller om alla ursprungsländer ligger där.
@@ -151,10 +154,11 @@ const store = {
 const oldCfg = store.get("cfg",{});
 let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
                           exclude:["southasia","eastasia","seasia"],
-                          minYear:2026, yearOn:true, source:"rapid" }, store.get("cfg2",{}));
+                          minYear:2026, yearOn:true, source:"rapid",
+                          services:SERVICES.map(s=>s.key) }, store.get("cfg2",{}));
 let hidden = new Set(store.get("hidden",[]));
 let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
-let state = { type:"all", svc:new Set(SERVICES.map(s=>s.key)), showHidden:false,
+let state = { type:"all", svc:new Set(cfg.services), showHidden:false,
               shows:new Map(), cursor:null, hasMore:false };
 
 // ---------- Streaming Availability API ----------
@@ -190,7 +194,7 @@ async function sa(path, params){
 async function fetchPage(cursor){
   return sa("/changes", {
     country: COUNTRY,
-    catalogs: SA_SERVICES.map(s=>s.key+".subscription").join(","),
+    catalogs: mySa().map(s=>s.key+".subscription").join(","),
     change_type: "new",
     item_type: "show",
     order_direction: "desc",
@@ -213,8 +217,10 @@ function ingest(res){
   state.hasMore = !!res.hasMore;
 }
 
+const feedKey = () => ["feed4", cfg.source, cfg.services.join(","),
+  cfg.source==="tmdb" ? (cfg.yearOn ? cfg.minYear : "ar") : ""].join("|");
 function saveCache(){
-  store.set("feed3-"+cfg.source,{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
+  store.set(feedKey(),{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
                      items:[...state.shows.entries()] });
 }
 
@@ -226,7 +232,7 @@ async function load(force=false, more=false){
     status.style.display=""; showUsage(); return;
   }
   if (!force && !more){
-    const c = store.get("feed3-"+cfg.source,null);
+    const c = store.get(feedKey(),null);
     if (c && Date.now()-c.t < CACHE_HOURS*36e5){
       state.shows = new Map(c.items); state.cursor = c.cursor; state.hasMore = c.hasMore;
       await enrich(); render(); return;
@@ -236,17 +242,20 @@ async function load(force=false, more=false){
   status.textContent = "Hämtar nyheter…"; status.style.display="";
   try{
     if (tmdbOnly){
-      await loadTmdbServices(SERVICES);
+      await loadTmdbServices(mine());
       state.hasMore = false;
-    } else {
+    } else if (mySa().length) {
       for (let i=0; i<PAGES_PER_LOAD; i++){
         ingest(await fetchPage(state.cursor));
         if (!state.hasMore) break;
       }
       if (!more && cfg.tmdbKey){
         status.textContent = "Hämtar Viaplay…";
-        try{ await loadTmdbServices(SERVICES.filter(s=>s.src==="tmdb")); }catch(e){ console.warn("Viaplay:", e); }
+        try{ await loadTmdbServices(mine().filter(s=>s.src==="tmdb")); }catch(e){ console.warn("Viaplay:", e); }
       }
+    } else if (cfg.tmdbKey) {
+      await loadTmdbServices(mine().filter(s=>s.src==="tmdb"));
+      state.hasMore = false;
     }
     saveCache();
     status.textContent = "Kollar ursprungsland…";
@@ -267,41 +276,52 @@ async function tmdbGet(path, params={}){
 }
 
 async function loadTmdbServices(services){
-  const today = new Date(), from = new Date(Date.now()-TMDB_DAYS*864e5), iso = d=>d.toISOString().slice(0,10);
+  // Fönster: från 1 jan årsfiltrets år (om på), annars ett år bakåt. TMDB har ingen dygnsgräns,
+  // så vi hämtar flera sidor per tjänst – parallellt för att det ska gå fort.
+  const iso = d=>d.toISOString().slice(0,10), today = iso(new Date());
+  const from = cfg.yearOn ? `${cfg.minYear}-01-01` : iso(new Date(Date.now()-365*864e5));
   const providers = {};
-  for (const type of ["movie","tv"])
+  await Promise.all(["movie","tv"].map(async type=>{
     providers[type] = (await tmdbGet(`/watch/providers/${type}`, { watch_region:"SE" })).results || [];
-  for (const svc of services){
-    for (const type of ["movie","tv"]){
-      const results = providers[type];
-      const ids = results.filter(p=>svc.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
-      if (!ids.length) continue;
-      const df = type==="movie" ? "primary_release_date" : "first_air_date";
-      const { results:list=[] } = await tmdbGet(`/discover/${type}`, {
-        watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"),
-        with_watch_monetization_types:"flatrate", sort_by:df+".desc",
-        [df+".gte"]:iso(from), [df+".lte"]:iso(today), include_adult:"false" });
-      for (const x of list){
-        const tmdbId = type+"/"+x.id, date = x.release_date || x.first_air_date;
-        if (!date) continue;
-        const ts = Math.floor(new Date(date).getTime()/1000);
-        const link = `https://www.themoviedb.org/${tmdbId}/watch?locale=SE`;
-        // Finns titeln redan från Streaming Availability? Lägg då bara till Viaplay på den.
-        const existing = [...state.shows.values()].find(it=>it.show.tmdbId===tmdbId);
-        const it = existing || { show:{
-            showType: type==="movie" ? "movie" : "series", tmdbId, title: x.title || x.name,
-            overview: x.overview, releaseYear: type==="movie" ? +date.slice(0,4) : undefined,
-            firstAirYear: type==="tv" ? +date.slice(0,4) : undefined,
-            rating: x.vote_count >= 5 ? Math.round(x.vote_average*10) : 0,
-            imageSet:{ verticalPoster:x.poster_path?{ w360:"https://image.tmdb.org/t/p/w342"+x.poster_path }:undefined,
-                       horizontalBackdrop:x.backdrop_path?{ w720:"https://image.tmdb.org/t/p/w780"+x.backdrop_path }:undefined } },
-          added:{}, links:{} };
-        it.added[svc.key] = ts; it.links[svc.key] = link;
-        it.approx = Object.assign(it.approx||{}, { [svc.key]:true });
-        if (!existing) state.shows.set("tmdb:"+tmdbId, it);
-      }
+  }));
+  const jobs = [];
+  for (const svc of services) for (const type of ["movie","tv"]){
+    const ids = providers[type].filter(p=>svc.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
+    if (!ids.length) continue;
+    const df = type==="movie" ? "primary_release_date" : "first_air_date";
+    for (let page=1; page<=TMDB_PAGES; page++)
+      jobs.push(tmdbGet(`/discover/${type}`, {
+          watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"),
+          with_watch_monetization_types:"flatrate", sort_by:df+".desc",
+          [df+".gte"]:from, [df+".lte"]:today, include_adult:"false", page })
+        .then(r=>({ svc, type, list:r.results||[] })).catch(()=>({ svc, type, list:[] })));
+  }
+  for (const { svc, type, list } of await Promise.all(jobs)){
+    for (const x of list){
+      const tmdbId = type+"/"+x.id, date = x.release_date || x.first_air_date;
+      if (!date) continue;
+      const ts = Math.floor(new Date(date).getTime()/1000);
+      const link = `https://www.themoviedb.org/${tmdbId}/watch?locale=SE`;
+      // Discover-svaret har redan språk, land (serier) och svensk beskrivning – spara direkt
+      // så att vi slipper en extra TMDB-fråga per titel.
+      if (!meta[tmdbId] && x.original_language)
+        meta[tmdbId] = { lang:x.original_language, countries:x.origin_country||[], sv:x.overview||null };
+      const existing = [...state.shows.values()].find(it=>it.show.tmdbId===tmdbId);
+      const it = existing || { show:{
+          showType: type==="movie" ? "movie" : "series", tmdbId, title: x.title || x.name,
+          overview: x.overview, releaseYear: type==="movie" ? +date.slice(0,4) : undefined,
+          firstAirYear: type==="tv" ? +date.slice(0,4) : undefined,
+          rating: x.vote_count >= 5 ? Math.round(x.vote_average*10) : 0,
+          imageSet:{ verticalPoster:x.poster_path?{ w360:"https://image.tmdb.org/t/p/w342"+x.poster_path }:undefined,
+                     horizontalBackdrop:x.backdrop_path?{ w720:"https://image.tmdb.org/t/p/w780"+x.backdrop_path }:undefined } },
+        added:{}, links:{} };
+      if (!it.added[svc.key] || ts > it.added[svc.key]) it.added[svc.key] = ts;
+      it.links[svc.key] = it.links[svc.key] || link;
+      it.approx = Object.assign(it.approx||{}, { [svc.key]:true });
+      if (!existing) state.shows.set("tmdb:"+tmdbId, it);
     }
   }
+  store.set("meta",meta);
 }
 
 // ---------- TMDB: ursprungsland, originalspråk och svensk beskrivning ----------
@@ -432,12 +452,6 @@ function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classLi
 document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
 
 // filter
-const svcChips = document.getElementById("svcChips");
-for (const s of SERVICES){
-  const b = document.createElement("button"); b.textContent = s.label; b.className="on";
-  b.onclick = ()=>{ state.svc.has(s.key)?state.svc.delete(s.key):state.svc.add(s.key); b.classList.toggle("on"); render(); };
-  svcChips.appendChild(b);
-}
 document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
   state.type=b.dataset.type;
   document.querySelectorAll("#typeChips [data-type]").forEach(x=>x.classList.toggle("on",x===b)); render(); });
@@ -447,7 +461,8 @@ function updateYearBtn(){
   const b = document.getElementById("btnYear");
   b.textContent = `Från ${cfg.minYear}`; b.classList.toggle("on", cfg.yearOn);
 }
-document.getElementById("btnYear").onclick = ()=>{ cfg.yearOn = !cfg.yearOn; store.set("cfg2",cfg); updateYearBtn(); render(); };
+document.getElementById("btnYear").onclick = ()=>{ cfg.yearOn = !cfg.yearOn; store.set("cfg2",cfg); updateYearBtn();
+  cfg.source==="tmdb" ? load() : render(); };  // i TMDB-läget styr året vad som hämtas
 updateYearBtn();
 document.getElementById("btnMore").onclick = ()=>load(false,true);
 
@@ -455,6 +470,7 @@ document.getElementById("btnMore").onclick = ()=>load(false,true);
 const $ = id => document.getElementById(id);
 $("btnSettings").onclick = ()=>{
   $("source").value=cfg.source; $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("minYear").value=cfg.minYear;
+  $("serviceBoxes").innerHTML = SERVICES.map(s=>`<label class="chk"><input type="checkbox" value="${s.key}" ${cfg.services.includes(s.key)?"checked":""}> ${s.label}</label>`).join("");
   $("regionBoxes").innerHTML = REGIONS.map(r=>`<label class="chk"><input type="checkbox" value="${r.key}" ${cfg.exclude.includes(r.key)?"checked":""}> ${r.label}</label>`).join("");
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
@@ -462,8 +478,9 @@ $("saveSettings").onclick = e=>{ e.preventDefault();
   const prev = cfg;
   cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim(),
           exclude:[...document.querySelectorAll("#regionBoxes input:checked")].map(x=>x.value),
+          services:[...document.querySelectorAll("#serviceBoxes input:checked")].map(x=>x.value),
           minYear: +$("minYear").value || prev.minYear, yearOn: prev.yearOn, source: $("source").value };
-  store.set("cfg2",cfg); closeSheets(); updateYearBtn();
+  store.set("cfg2",cfg); state.svc = new Set(cfg.services); closeSheets(); updateYearBtn();
   // Ladda om från API:t bara om nycklarna ändrats – annars räcker cachen (sparar anrop).
   load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource || (cfg.source==="tmdb" && prev.tmdbKey!==cfg.tmdbKey)); };
 
