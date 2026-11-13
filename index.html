@@ -45,6 +45,11 @@
   .pad h2{margin:0 0 4px;font-size:20px}
   .actions{display:flex;flex-direction:column;gap:8px;margin-top:14px}
   .actions a{display:block;text-align:center;padding:12px;border-radius:12px;text-decoration:none;color:#fff;font-weight:600;background:var(--card);border:1px solid var(--line)}
+  .actions a.tv{background:#1b7f4b;border-color:#1b7f4b}
+  #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);
+         background:#2a2f3a;color:var(--fg);padding:10px 16px;border-radius:12px;opacity:0;transition:.25s;z-index:50;
+         max-width:90vw;text-align:center;pointer-events:none}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .actions a.trailer{background:#2a2f3a;border-color:#3a4150}
   #people{margin-top:8px;line-height:1.5}
   #people b{color:var(--fg);font-weight:600}
@@ -88,6 +93,7 @@
 
 <div class="sheet" id="settings"><div class="panel"><div class="pad">
   <h2>Inställningar</h2>
+  <div id="tvSection"></div>
   <label for="source">Datakälla</label>
   <select id="source">
     <option value="rapid">RapidAPI – datum när titeln lades upp + direktlänkar</option>
@@ -455,6 +461,7 @@ function openDetail(id,it){
       <div id="people" class="m">${s.cast?.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
       <div class="actions">
         <span id="trailerSlot" style="display:contents"></span>
+        ${tvButtons(it)}
         ${buttons}
         <a href="#" id="toggleHide">${isHidden?"Visa igen":"Dölj (sedd / ointressant)"}</a>
         <a href="#" id="closeDetail">Stäng</a>
@@ -475,6 +482,90 @@ function openDetail(id,it){
     if (ppl.length) $("people").innerHTML = ppl.join("");
     if (ex.trailer) $("trailerSlot").innerHTML = `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
   });
+}
+
+// ---------- Google TV (bara i Android-appen, via window.TvBridge) ----------
+const TV = window.TvBridge || null;
+const tvCbs = {};
+window.__tvCb = (id, ok, data) => { const f = tvCbs[id]; delete tvCbs[id]; f && f(ok, data); };
+window.__tvBack = () => { const open = document.querySelector(".sheet.open"); if (open){ closeSheets(); return true; } return false; };
+function tvCall(method, ...args){
+  return new Promise((res, rej) => {
+    const id = "c" + Math.random().toString(36).slice(2);
+    tvCbs[id] = (ok, d) => ok ? res(d) : rej(new Error(d));
+    TV[method](...args, id);
+  });
+}
+const tvInfo = () => { try{ return JSON.parse(TV.getTv()); }catch{ return {}; } };
+// Startlänkar för tjänstens app när vi inte har en direktlänk (TMDB-läget).
+const APP_HOME = { netflix:"https://www.netflix.com/title", prime:"https://app.primevideo.com",
+  hbo:"https://play.hbomax.com", disney:"https://www.disneyplus.com", apple:"https://tv.apple.com",
+  skyshowtime:"https://www.skyshowtime.com", viaplay:"https://viaplay.se" };
+
+function toast(msg){
+  let t = $("toast");
+  if (!t){ t = document.createElement("div"); t.id="toast"; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.h); toast.h = setTimeout(()=>t.classList.remove("show"), 3500);
+}
+
+function tvButtons(it){
+  if (!TV || !tvInfo().paired) return "";
+  const approx = it.approx || {};
+  return Object.keys(it.added).map(k => {
+    const direct = !approx[k] && it.links[k];
+    const url = direct ? it.links[k] : APP_HOME[k];
+    if (!url) return "";
+    return `<a href="#" class="tv" data-url="${esc(url)}">📺 ${direct ? "Spela på TV" : "Öppna "+svcLabel(k)+" på TV"}${direct && Object.keys(it.added).length>1 ? " ("+svcLabel(k)+")" : ""}</a>`;
+  }).join("");
+}
+document.addEventListener("click", e => {
+  const a = e.target.closest("a.tv"); if (!a) return;
+  e.preventDefault();
+  toast("Skickar till TV:n…");
+  tvCall("launch", a.dataset.url).then(()=>toast("Öppnas på TV:n 📺")).catch(err=>toast(err.message));
+});
+
+function renderTvSection(){
+  const el = $("tvSection"); if (!el || !TV) return;
+  const info = tvInfo();
+  el.innerHTML = `
+    <label>Google TV</label>
+    <p class="tip" style="margin-top:0">${info.paired ? `Parkopplad med <b>${esc(info.name||info.host)}</b> (${esc(info.host)}).` : info.host ? `Vald: ${esc(info.name||info.host)} – inte parkopplad än.` : "Ingen TV vald."}</p>
+    <div class="actions" style="margin-top:6px">
+      <a href="#" id="tvFind">🔍 Sök efter TV på wifi</a>
+    </div>
+    <div id="tvFound"></div>
+    <label for="tvIp">…eller ange TV:ns IP-adress</label>
+    <div class="row"><input id="tvIp" inputmode="decimal" placeholder="t.ex. 192.168.1.50"><button id="tvIpGo">Välj</button></div>
+    <div id="tvPair"></div>`;
+  $("tvFind").onclick = e => { e.preventDefault();
+    $("tvFound").innerHTML = `<p class="tip">Söker…</p>`;
+    tvCall("discover").then(json => {
+      const list = JSON.parse(json);
+      $("tvFound").innerHTML = list.length
+        ? `<div class="actions">${list.map(t=>`<a href="#" data-host="${esc(t.host)}" data-name="${esc(t.name)}">📺 ${esc(t.name)}</a>`).join("")}</div>`
+        : `<p class="tip">Hittade ingen TV. Kontrollera att den är påslagen och på samma wifi, eller ange IP-adressen.</p>`;
+      $("tvFound").querySelectorAll("a[data-host]").forEach(a => a.onclick = ev => { ev.preventDefault(); pair(a.dataset.host, a.dataset.name); });
+    }).catch(err => $("tvFound").innerHTML = `<p class="tip">${esc(err.message)}</p>`);
+  };
+  $("tvIpGo").onclick = () => { const ip = $("tvIp").value.trim(); if (ip) pair(ip, ip); };
+}
+
+function pair(host, name){
+  $("tvPair").innerHTML = `<p class="tip">Ansluter till ${esc(name)}…</p>`;
+  tvCall("startPairing", host, name).then(() => {
+    $("tvPair").innerHTML = `
+      <label for="tvCode">Skriv koden som visas på TV:n</label>
+      <div class="row"><input id="tvCode" autocapitalize="characters" maxlength="6" placeholder="6 tecken"><button id="tvCodeGo">Klar</button></div>`;
+    $("tvCode").focus();
+    $("tvCodeGo").onclick = () => {
+      $("tvCodeGo").disabled = true;
+      tvCall("finishPairing", $("tvCode").value).then(() => {
+        toast("Parkopplad med TV:n ✓"); renderTvSection();
+      }).catch(err => { $("tvCodeGo").disabled = false; toast(err.message); });
+    };
+  }).catch(err => $("tvPair").innerHTML = `<p class="tip">${esc(err.message)}</p>`);
 }
 
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
@@ -501,6 +592,7 @@ $("btnSettings").onclick = ()=>{
   $("source").value=cfg.source; $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("minYear").value=cfg.minYear;
   $("serviceBoxes").innerHTML = SERVICES.map(s=>`<label class="chk"><input type="checkbox" value="${s.key}" ${cfg.services.includes(s.key)?"checked":""}> ${s.label}</label>`).join("");
   $("regionBoxes").innerHTML = REGIONS.map(r=>`<label class="chk"><input type="checkbox" value="${r.key}" ${cfg.exclude.includes(r.key)?"checked":""}> ${r.label}</label>`).join("");
+  renderTvSection();
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
 $("saveSettings").onclick = e=>{ e.preventDefault();
