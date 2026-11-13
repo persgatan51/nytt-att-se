@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Nytt att se</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--fg:#eef0f4;--mut:#9aa3b2;--acc:#e5b84b;--line:#2a2f3a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.95);backdrop-filter:blur(8px);padding:12px 14px 8px;border-bottom:1px solid var(--line)}
+  .row{display:flex;align-items:center;gap:8px}
+  h1{font-size:20px;margin:0;flex:1}
+  button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer}
+  button.on{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
+  .chips{display:flex;gap:6px;overflow-x:auto;padding-top:8px;scrollbar-width:none}
+  .chips button{white-space:nowrap}
+  main{padding:12px 14px 40px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px}
+  .item{background:none;border:0;border-radius:10px;padding:0;text-align:left}
+  .item img,.ph{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:10px;background:var(--card);display:block}
+  .ph{display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px;padding:6px;text-align:center}
+  .t{font-size:13px;margin-top:5px;font-weight:600;line-height:1.25}
+  .m{font-size:11px;color:var(--mut)}
+  .badges{display:flex;gap:3px;margin-top:3px;flex-wrap:wrap}
+  .b{font-size:10px;padding:1px 6px;border-radius:6px;font-weight:700}
+  .b.netflix{background:#e50914;color:#fff}.b.prime{background:#00a8e1;color:#001}.b.hbo{background:#7b2cff;color:#fff}
+  .msg{color:var(--mut);text-align:center;padding:30px 10px}
+  .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}
+  .sheet.open{display:flex}
+  .panel{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--line);padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+  .hero{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:var(--card)}
+  .pad{padding:14px}
+  .pad h2{margin:0 0 4px;font-size:20px}
+  .actions{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .actions a{display:block;text-align:center;padding:12px;border-radius:12px;text-decoration:none;color:#fff;font-weight:600;background:var(--card);border:1px solid var(--line)}
+  .actions a.primary{background:var(--acc);color:#111;border-color:var(--acc)}
+  .actions a.netflix{background:#e50914;border-color:#e50914}
+  .actions a.prime{background:#00a8e1;border-color:#00a8e1;color:#001}
+  .actions a.hbo{background:#7b2cff;border-color:#7b2cff}
+  .tip{font-size:12px;color:var(--mut);margin-top:10px}
+  input{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+  label{display:block;margin:12px 0 6px;color:var(--mut);font-size:13px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Nytt att se</h1>
+    <button id="btnSettings" aria-label="Inställningar">⚙︎</button>
+  </div>
+  <div class="chips" id="typeChips">
+    <button data-type="all" class="on">Alla</button>
+    <button data-type="movie">Filmer</button>
+    <button data-type="tv">Serier</button>
+    <button id="btnHidden">Visa dolda</button>
+  </div>
+  <div class="chips" id="svcChips"></div>
+</header>
+
+<main>
+  <div id="status" class="msg">Laddar…</div>
+  <div id="grid" class="grid"></div>
+</main>
+
+<div class="sheet" id="detail"><div class="panel" id="detailBody"></div></div>
+
+<div class="sheet" id="settings"><div class="panel"><div class="pad">
+  <h2>Inställningar</h2>
+  <label for="key">TMDB API-nyckel (v3-nyckel eller v4 "Read Access Token")</label>
+  <input id="key" autocomplete="off" spellcheck="false" placeholder="Klistra in nyckeln här">
+  <p class="tip">Skaffa gratis på themoviedb.org → Inställningar → API. Nyckeln sparas bara i den här webbläsaren.</p>
+  <label for="days">Visa titlar släppta de senaste … dagarna</label>
+  <input id="days" type="number" min="7" max="730" value="180">
+  <label for="minVotes">Minsta antal röster på TMDB (filtrerar bort skräp)</label>
+  <input id="minVotes" type="number" min="0" max="1000" value="5">
+  <div class="actions">
+    <a href="#" class="primary" id="saveSettings">Spara</a>
+    <a href="#" id="closeSettings">Stäng</a>
+  </div>
+</div></div></div>
+
+<script>
+const REGION = "SE", LANG = "sv-SE";
+const SERVICES = [
+  { key:"netflix", label:"Netflix",     match:/^netflix$/i,
+    search:q=>`https://www.netflix.com/search?q=${encodeURIComponent(q)}` },
+  { key:"prime",   label:"Prime Video", match:/^amazon prime video$/i,
+    search:q=>`https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${encodeURIComponent(q)}` },
+  { key:"hbo",     label:"HBO Max",     match:/^(hbo max|max)$/i,
+    search:q=>`https://play.hbomax.com/search?q=${encodeURIComponent(q)}` },
+];
+const IMG = "https://image.tmdb.org/t/p/";
+
+// ---------- lagring (tål att localStorage saknas) ----------
+const store = {
+  get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{ return d; } },
+  set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
+};
+let cfg = Object.assign({ key:"", days:180, minVotes:5 }, store.get("cfg",{}));
+let hidden = new Set(store.get("hidden",[]));
+let state = { type:"all", svc:new Set(SERVICES.map(s=>s.key)), showHidden:false, items:[] };
+
+// ---------- TMDB ----------
+async function tmdb(path, params={}){
+  const url = new URL("https://api.themoviedb.org/3"+path);
+  const headers = { accept:"application/json" };
+  const k = cfg.key.trim();
+  if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key", k);
+  for (const [a,b] of Object.entries(params)) url.searchParams.set(a,b);
+  const r = await fetch(url, { headers });
+  if (r.status === 401) throw new Error("Ogiltig API-nyckel – kontrollera under ⚙︎.");
+  if (!r.ok) throw new Error("TMDB svarade "+r.status);
+  return r.json();
+}
+
+async function providerIds(){
+  const cached = store.get("prov",null);
+  if (cached && Date.now()-cached.t < 7*864e5) return cached.ids;
+  const ids = {};
+  for (const type of ["movie","tv"]){
+    const { results=[] } = await tmdb(`/watch/providers/${type}`, { watch_region:REGION, language:LANG });
+    for (const s of SERVICES){
+      const hit = results.filter(p=>s.match.test(p.provider_name.trim())).map(p=>p.provider_id);
+      ids[s.key] = ids[s.key] || {};
+      ids[s.key][type] = hit;
+    }
+  }
+  store.set("prov",{ t:Date.now(), ids });
+  return ids;
+}
+
+const iso = d => d.toISOString().slice(0,10);
+
+async function discover(type, provIds){
+  if (!provIds.length) return [];
+  const today = new Date(), from = new Date(Date.now()-cfg.days*864e5);
+  const dateField = type==="movie" ? "primary_release_date" : "first_air_date";
+  const base = {
+    watch_region:REGION, language:LANG,
+    with_watch_providers: provIds.join("|"),
+    with_watch_monetization_types:"flatrate",
+    sort_by: dateField+".desc",
+    [dateField+".gte"]: iso(from), [dateField+".lte"]: iso(today),
+    "vote_count.gte": cfg.minVotes, include_adult:"false"
+  };
+  const pages = await Promise.all([1,2].map(page=>tmdb(`/discover/${type}`, { ...base, page })));
+  return pages.flatMap(p=>p.results||[]);
+}
+
+async function load(){
+  const status = document.getElementById("status");
+  if (!cfg.key){ status.innerHTML = 'Lägg in din TMDB-nyckel under <b>⚙︎</b> för att komma igång.'; status.style.display=""; return; }
+  status.textContent = "Hämtar nyheter…"; status.style.display="";
+  try{
+    const ids = await providerIds();
+    const map = new Map();
+    const jobs = [];
+    for (const s of SERVICES) for (const type of ["movie","tv"])
+      jobs.push(discover(type, ids[s.key]?.[type]||[]).then(list=>list.forEach(x=>{
+        const id = type+":"+x.id;
+        const it = map.get(id) || { ...x, type, uid:id, services:new Set() };
+        it.services.add(s.key); map.set(id,it);
+      })));
+    await Promise.all(jobs);
+    state.items = [...map.values()].sort((a,b)=>date(b).localeCompare(date(a)));
+    render();
+  }catch(e){ status.textContent = e.message; }
+}
+
+const date = x => x.release_date || x.first_air_date || "";
+const title = x => x.title || x.name || "";
+
+// ---------- UI ----------
+function render(){
+  const grid = document.getElementById("grid"), status = document.getElementById("status");
+  const list = state.items.filter(x =>
+    (state.type==="all" || x.type===state.type) &&
+    [...x.services].some(s=>state.svc.has(s)) &&
+    (state.showHidden || !hidden.has(x.uid)));
+  status.style.display = list.length ? "none" : "";
+  if (!list.length) status.textContent = "Inget nytt med de här filtren.";
+  grid.innerHTML = "";
+  for (const x of list){
+    const b = document.createElement("button"); b.className="item";
+    const poster = x.poster_path ? `<img loading="lazy" alt="" src="${IMG}w342${x.poster_path}">` : `<div class="ph">${esc(title(x))}</div>`;
+    b.innerHTML = `${poster}<div class="t">${esc(title(x))}</div>
+      <div class="m">${x.type==="tv"?"Serie":"Film"} · ${date(x).slice(0,4)}${x.vote_average?` · ★ ${x.vote_average.toFixed(1)}`:""}</div>
+      <div class="badges">${[...x.services].map(s=>`<span class="b ${s}">${SERVICES.find(z=>z.key===s).label}</span>`).join("")}</div>`;
+    b.onclick = ()=>openDetail(x);
+    grid.appendChild(b);
+  }
+}
+
+function openDetail(x){
+  const watchUrl = `https://www.themoviedb.org/${x.type}/${x.id}/watch?locale=${REGION}`;
+  const svcLinks = [...x.services].map(k=>{ const s=SERVICES.find(z=>z.key===k);
+    return `<a class="${k}" href="${s.search(title(x))}" target="_blank" rel="noopener">Sök i ${s.label}</a>`; }).join("");
+  const isHidden = hidden.has(x.uid);
+  document.getElementById("detailBody").innerHTML = `
+    ${x.backdrop_path ? `<img class="hero" alt="" src="${IMG}w780${x.backdrop_path}">` : ""}
+    <div class="pad">
+      <h2>${esc(title(x))}</h2>
+      <div class="m">${x.type==="tv"?"Serie":"Film"} · ${date(x)}${x.vote_average?` · ★ ${x.vote_average.toFixed(1)} (${x.vote_count})`:""}</div>
+      <p>${esc(x.overview || "Ingen beskrivning på svenska.")}</p>
+      <div class="actions">
+        <a class="primary" href="${watchUrl}" target="_blank" rel="noopener">▶ Öppna titeln i streamingappen</a>
+        ${svcLinks}
+        <a href="#" id="toggleHide">${isHidden?"Visa igen":"Dölj (sedd / ointressant)"}</a>
+        <a href="#" id="closeDetail">Stäng</a>
+      </div>
+      <p class="tip">"Öppna titeln" visar var den går att se. Tryck på tjänsten där, så öppnas titeln i appen. Tryck sedan på casta-ikonen för att spela på TV:n.</p>
+    </div>`;
+  document.getElementById("detail").classList.add("open");
+  document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeSheets(); };
+  document.getElementById("toggleHide").onclick = e=>{ e.preventDefault();
+    isHidden ? hidden.delete(x.uid) : hidden.add(x.uid); store.set("hidden",[...hidden]); closeSheets(); render(); };
+}
+
+function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
+document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
+const esc = s => String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// filter-chips
+const svcChips = document.getElementById("svcChips");
+for (const s of SERVICES){
+  const b = document.createElement("button"); b.textContent = s.label; b.className="on";
+  b.onclick = ()=>{ state.svc.has(s.key)?state.svc.delete(s.key):state.svc.add(s.key); b.classList.toggle("on"); render(); };
+  svcChips.appendChild(b);
+}
+document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
+  state.type=b.dataset.type;
+  document.querySelectorAll("#typeChips [data-type]").forEach(x=>x.classList.toggle("on",x===b)); render(); });
+document.getElementById("btnHidden").onclick = e=>{ state.showHidden=!state.showHidden; e.target.classList.toggle("on",state.showHidden); render(); };
+
+// inställningar
+document.getElementById("btnSettings").onclick = ()=>{
+  key.value=cfg.key; days.value=cfg.days; minVotes.value=cfg.minVotes;
+  document.getElementById("settings").classList.add("open"); };
+document.getElementById("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
+document.getElementById("saveSettings").onclick = e=>{ e.preventDefault();
+  cfg = { key:key.value.trim(), days:+days.value||180, minVotes:+minVotes.value||0 };
+  store.set("cfg",cfg); store.set("prov",null); closeSheets(); load(); };
+
+load();
+</script>
+</body>
+</html>
