@@ -30,9 +30,10 @@
   .badges{display:flex;gap:3px;margin-top:3px;flex-wrap:wrap}
   .b{font-size:10px;padding:1px 6px;border-radius:6px;font-weight:700}
   .b.netflix{background:#e50914;color:#fff}.b.prime{background:#00a8e1;color:#001}.b.hbo{background:#7b2cff;color:#fff}
-  .b.apple{background:#f2f2f2;color:#111}.b.skyshowtime{background:#1f2f8f;color:#fff}.b.viaplay{background:#e4003a;color:#fff}
+  .b.apple{background:#f2f2f2;color:#111}.b.skyshowtime{background:#1f2f8f;color:#fff}.b.viaplay{background:#e4003a;color:#fff}.b.disney{background:#0b3fa8;color:#fff}
   .actions a.apple{background:#f2f2f2;border-color:#f2f2f2;color:#111}
   .actions a.skyshowtime{background:#1f2f8f;border-color:#1f2f8f}
+  .actions a.disney{background:#0b3fa8;border-color:#0b3fa8}
   .actions a.viaplay{background:#e4003a;border-color:#e4003a}
   .msg{color:var(--mut);text-align:center;padding:30px 10px}
   .more{display:block;margin:20px auto 0}
@@ -116,11 +117,12 @@ const SERVICES = [
   { key:"prime",       label:"Prime Video", src:"sa" },
   { key:"hbo",         label:"HBO Max",     src:"sa" },
   { key:"apple",       label:"Apple TV",    src:"sa" },
+  { key:"disney",      label:"Disney+",     src:"sa" },
   { key:"skyshowtime", label:"SkyShowtime", src:"sa" },
   { key:"viaplay",     label:"Viaplay",     src:"tmdb", match:/^viaplay$/i },
 ];
 const SA_SERVICES = SERVICES.filter(s=>s.src==="sa");
-const CACHE_HOURS = 6, PAGES_PER_LOAD = 4, TMDB_DAYS = 120;
+const CACHE_HOURS = 6, PAGES_PER_LOAD = 5, TMDB_DAYS = 120;
 
 // Regioner som kan filtreras bort. En titel räknas till regionen om originalspråket
 // hör dit, eller om alla ursprungsländer ligger där.
@@ -205,7 +207,7 @@ function ingest(res){
 }
 
 function saveCache(){
-  store.set("feed2",{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
+  store.set("feed3",{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
                      items:[...state.shows.entries()] });
 }
 
@@ -216,7 +218,7 @@ async function load(force=false, more=false){
     status.style.display=""; return;
   }
   if (!force && !more){
-    const c = store.get("feed2",null);
+    const c = store.get("feed3",null);
     if (c && Date.now()-c.t < CACHE_HOURS*36e5){
       state.shows = new Map(c.items); state.cursor = c.cursor; state.hasMore = c.hasMore;
       await enrich(); render(); return;
