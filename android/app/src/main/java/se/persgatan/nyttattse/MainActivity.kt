@@ -47,7 +47,12 @@ class MainActivity : Activity() {
             }
         }
         web.addJavascriptInterface(Bridge(), "TvBridge")
-        if (savedInstanceState != null) web.restoreState(savedInstanceState) else web.loadUrl(START_URL)
+        // Låt webbsidan sköta långa tryck (snabbmenyn) – inte WebViews egen textmarkering.
+        web.setOnLongClickListener { true }
+        web.isHapticFeedbackEnabled = false
+        // ?v= gör att sidan alltid hämtas färsk vid start (GitHub Pages cachar annars i upp till 10 min).
+        if (savedInstanceState != null) web.restoreState(savedInstanceState)
+        else web.loadUrl(START_URL + "?v=" + System.currentTimeMillis())
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
