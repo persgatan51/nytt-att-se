@@ -86,7 +86,12 @@
 
 <div class="sheet" id="settings"><div class="panel"><div class="pad">
   <h2>Inställningar</h2>
-  <label for="saKey">Streaming Availability API-nyckel (krävs)</label>
+  <label for="source">Datakälla</label>
+  <select id="source">
+    <option value="rapid">RapidAPI – datum när titeln lades upp + direktlänkar</option>
+    <option value="tmdb">Bara TMDB – premiärdatum, inga RapidAPI-anrop</option>
+  </select>
+  <label for="saKey">Streaming Availability API-nyckel (krävs för RapidAPI)</label>
   <input id="saKey" autocomplete="off" spellcheck="false" placeholder="Klistra in nyckeln här">
   <label for="saSource">Var kommer nyckeln ifrån?</label>
   <select id="saSource">
@@ -94,7 +99,7 @@
     <option value="motn">Movie of the Night (developers.movieofthenight.com)</option>
   </select>
   <p class="tip">Gratisnivån räcker gott för privat bruk. Appen sparar svaren i några timmar för att spara anrop.</p>
-  <label for="tmdbKey">TMDB-nyckel (valfri – ger svenska beskrivningar)</label>
+  <label for="tmdbKey">TMDB-nyckel (krävs för "Bara TMDB", Viaplay, landfilter och svenska beskrivningar)</label>
   <input id="tmdbKey" autocomplete="off" spellcheck="false" placeholder="v3-nyckel eller Read Access Token">
   <p class="tip">Nycklarna sparas bara i den här webbläsaren.</p>
   <label for="minYear">Visa bara titlar utgivna från och med år (slås av/på med knappen i listan)</label>
@@ -113,12 +118,12 @@ const COUNTRY = "se";
 // src "sa"   = Streaming Availability (datum för när titeln lades upp + direktlänk)
 // src "tmdb" = TMDB (bara premiärdatum + länk till TMDB:s "var kan jag se"-sida)
 const SERVICES = [
-  { key:"netflix",     label:"Netflix",     src:"sa" },
-  { key:"prime",       label:"Prime Video", src:"sa" },
-  { key:"hbo",         label:"HBO Max",     src:"sa" },
-  { key:"apple",       label:"Apple TV",    src:"sa" },
-  { key:"disney",      label:"Disney+",     src:"sa" },
-  { key:"skyshowtime", label:"SkyShowtime", src:"sa" },
+  { key:"netflix",     label:"Netflix",     src:"sa", match:/^netflix$/i },
+  { key:"prime",       label:"Prime Video", src:"sa", match:/^amazon prime video$/i },
+  { key:"hbo",         label:"HBO Max",     src:"sa", match:/^(hbo max|max)$/i },
+  { key:"apple",       label:"Apple TV",    src:"sa", match:/^apple tv( plus|\+)?$/i },
+  { key:"disney",      label:"Disney+",     src:"sa", match:/^disney( plus|\+)$/i },
+  { key:"skyshowtime", label:"SkyShowtime", src:"sa", match:/^skyshowtime$/i },
   { key:"viaplay",     label:"Viaplay",     src:"tmdb", match:/^viaplay$/i },
 ];
 const SA_SERVICES = SERVICES.filter(s=>s.src==="sa");
@@ -146,7 +151,7 @@ const store = {
 const oldCfg = store.get("cfg",{});
 let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
                           exclude:["southasia","eastasia","seasia"],
-                          minYear:2026, yearOn:true }, store.get("cfg2",{}));
+                          minYear:2026, yearOn:true, source:"rapid" }, store.get("cfg2",{}));
 let hidden = new Set(store.get("hidden",[]));
 let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
 let state = { type:"all", svc:new Set(SERVICES.map(s=>s.key)), showHidden:false,
@@ -161,8 +166,10 @@ function countCall(){
 }
 function showUsage(){
   const u = store.get("usage",null), today = new Date().toISOString().slice(0,10);
-  document.getElementById("usage").textContent =
-    u && u.day===today ? `${u.n} anrop till Streaming Availability idag` : "";
+  const n = u && u.day===today ? u.n : 0;
+  document.getElementById("usage").textContent = cfg.source==="tmdb"
+    ? `Källa: bara TMDB · ${n} RapidAPI-anrop idag`
+    : `Källa: RapidAPI · ${n} anrop idag`;
 }
 
 async function sa(path, params){
@@ -207,18 +214,19 @@ function ingest(res){
 }
 
 function saveCache(){
-  store.set("feed3",{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
+  store.set("feed3-"+cfg.source,{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
                      items:[...state.shows.entries()] });
 }
 
 async function load(force=false, more=false){
   const status = document.getElementById("status");
-  if (!cfg.saKey){
-    status.innerHTML = 'Lägg in din Streaming Availability-nyckel under <b>⚙︎</b> för att komma igång.';
-    status.style.display=""; return;
+  const tmdbOnly = cfg.source==="tmdb";
+  if (tmdbOnly ? !cfg.tmdbKey : !cfg.saKey){
+    status.innerHTML = `Lägg in din ${tmdbOnly?"TMDB":"Streaming Availability"}-nyckel under <b>⚙︎</b> för att komma igång.`;
+    status.style.display=""; showUsage(); return;
   }
   if (!force && !more){
-    const c = store.get("feed3",null);
+    const c = store.get("feed3-"+cfg.source,null);
     if (c && Date.now()-c.t < CACHE_HOURS*36e5){
       state.shows = new Map(c.items); state.cursor = c.cursor; state.hasMore = c.hasMore;
       await enrich(); render(); return;
@@ -227,13 +235,18 @@ async function load(force=false, more=false){
   if (!more){ state.shows = new Map(); state.cursor = null; }
   status.textContent = "Hämtar nyheter…"; status.style.display="";
   try{
-    for (let i=0; i<PAGES_PER_LOAD; i++){
-      ingest(await fetchPage(state.cursor));
-      if (!state.hasMore) break;
-    }
-    if (!more && cfg.tmdbKey){
-      status.textContent = "Hämtar Viaplay…";
-      try{ await loadTmdbServices(); }catch(e){ console.warn("Viaplay:", e); }
+    if (tmdbOnly){
+      await loadTmdbServices(SERVICES);
+      state.hasMore = false;
+    } else {
+      for (let i=0; i<PAGES_PER_LOAD; i++){
+        ingest(await fetchPage(state.cursor));
+        if (!state.hasMore) break;
+      }
+      if (!more && cfg.tmdbKey){
+        status.textContent = "Hämtar Viaplay…";
+        try{ await loadTmdbServices(SERVICES.filter(s=>s.src==="tmdb")); }catch(e){ console.warn("Viaplay:", e); }
+      }
     }
     saveCache();
     status.textContent = "Kollar ursprungsland…";
@@ -253,11 +266,14 @@ async function tmdbGet(path, params={}){
   return r.json();
 }
 
-async function loadTmdbServices(){
+async function loadTmdbServices(services){
   const today = new Date(), from = new Date(Date.now()-TMDB_DAYS*864e5), iso = d=>d.toISOString().slice(0,10);
-  for (const svc of SERVICES.filter(s=>s.src==="tmdb")){
+  const providers = {};
+  for (const type of ["movie","tv"])
+    providers[type] = (await tmdbGet(`/watch/providers/${type}`, { watch_region:"SE" })).results || [];
+  for (const svc of services){
     for (const type of ["movie","tv"]){
-      const { results=[] } = await tmdbGet(`/watch/providers/${type}`, { watch_region:"SE" });
+      const results = providers[type];
       const ids = results.filter(p=>svc.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
       if (!ids.length) continue;
       const df = type==="movie" ? "primary_release_date" : "first_air_date";
@@ -403,7 +419,7 @@ function openDetail(id,it){
         <a href="#" id="closeDetail">Stäng</a>
       </div>
       <p class="tip">Titeln öppnas i tjänstens app. Tryck sedan på casta-ikonen för att spela på TV:n.${
-        Object.keys(approx).length ? " För Viaplay visas premiärdatum (inte när titeln lades upp), och länken går via en sida där du väljer tjänsten." : ""}</p>
+        Object.keys(approx).length ? " Datum märkta (premiär) kommer från TMDB och visar premiären, inte när titeln lades upp. Länken går då via en sida där du väljer tjänsten." : ""}</p>
     </div>`;
   document.getElementById("detail").classList.add("open");
   document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeSheets(); };
@@ -438,7 +454,7 @@ document.getElementById("btnMore").onclick = ()=>load(false,true);
 // inställningar
 const $ = id => document.getElementById(id);
 $("btnSettings").onclick = ()=>{
-  $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("minYear").value=cfg.minYear;
+  $("source").value=cfg.source; $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("minYear").value=cfg.minYear;
   $("regionBoxes").innerHTML = REGIONS.map(r=>`<label class="chk"><input type="checkbox" value="${r.key}" ${cfg.exclude.includes(r.key)?"checked":""}> ${r.label}</label>`).join("");
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
@@ -446,10 +462,10 @@ $("saveSettings").onclick = e=>{ e.preventDefault();
   const prev = cfg;
   cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim(),
           exclude:[...document.querySelectorAll("#regionBoxes input:checked")].map(x=>x.value),
-          minYear: +$("minYear").value || prev.minYear, yearOn: prev.yearOn };
+          minYear: +$("minYear").value || prev.minYear, yearOn: prev.yearOn, source: $("source").value };
   store.set("cfg2",cfg); closeSheets(); updateYearBtn();
   // Ladda om från API:t bara om nycklarna ändrats – annars räcker cachen (sparar anrop).
-  load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource); };
+  load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource || (cfg.source==="tmdb" && prev.tmdbKey!==cfg.tmdbKey)); };
 
 load();
 </script>
