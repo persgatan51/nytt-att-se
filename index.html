@@ -511,19 +511,58 @@ function toast(msg){
 
 function tvButtons(it){
   if (!TV || !tvInfo().paired) return "";
-  const approx = it.approx || {};
+  const approx = it.approx || {}, several = Object.keys(it.added).length > 1;
   return Object.keys(it.added).map(k => {
-    const direct = !approx[k] && it.links[k];
-    const url = direct ? it.links[k] : APP_HOME[k];
-    if (!url) return "";
-    return `<a href="#" class="tv" data-url="${esc(url)}">📺 ${direct ? "Spela på TV" : "Öppna "+svcLabel(k)+" på TV"}${direct && Object.keys(it.added).length>1 ? " ("+svcLabel(k)+")" : ""}</a>`;
+    // Direktlänk finns (RapidAPI-läget), eller kan slås upp vid klick om RapidAPI-nyckel finns.
+    const canPlay = (!approx[k] && it.links[k]) || (cfg.saKey && it.show.tmdbId);
+    if (!canPlay && !APP_HOME[k]) return "";
+    const label = canPlay ? "📺 Spela på TV" + (several ? " ("+svcLabel(k)+")" : "") : "📺 Öppna "+svcLabel(k)+" på TV";
+    return `<a href="#" class="tv" data-svc="${k}" data-tmdb="${esc(it.show.tmdbId||"")}"
+      data-url="${esc(!approx[k] && it.links[k] ? it.links[k] : "")}">${label}</a>`;
   }).join("");
 }
-document.addEventListener("click", e => {
+
+// Netflix-appen på TV:n öppnar bara rätt titel om länken slutar med ?source=30,
+// annars öppnas appen och visar det man såg senast.
+function tvLink(svc, url){
+  if (svc === "netflix"){
+    const id = (url.match(/netflix\.com\/(?:[a-z-]+\/)?(?:title|watch)\/(\d+)/) || [])[1];
+    if (id) return `https://www.netflix.com/title/${id}?source=30`;
+  }
+  return url;
+}
+
+// I TMDB-läget saknas direktlänk. Slå då upp just den titeln i Streaming Availability
+// (ett anrop, bara när man trycker) och spara svaret.
+async function lookupDirectLink(svc, tmdbId){
+  const cache = store.get("deeplinks", {}), key = svc+"|"+tmdbId;
+  if (cache[key]) return cache[key];
+  const show = await sa("/shows/"+tmdbId, { country: COUNTRY });
+  const opt = (show.streamingOptions?.[COUNTRY] || [])
+    .find(o => o.service?.id === svc && o.type !== "rent" && o.type !== "buy");
+  const link = opt?.videoLink || opt?.link || null;
+  if (link){ cache[key] = link; store.set("deeplinks", cache); }
+  showUsage();
+  return link;
+}
+
+document.addEventListener("click", async e => {
   const a = e.target.closest("a.tv"); if (!a) return;
   e.preventDefault();
-  toast("Skickar till TV:n…");
-  tvCall("launch", a.dataset.url).then(()=>toast("Öppnas på TV:n 📺")).catch(err=>toast(err.message));
+  const svc = a.dataset.svc;
+  let url = a.dataset.url;
+  try{
+    if (!url && cfg.saKey && a.dataset.tmdb){
+      toast("Hämtar länk…");
+      url = await lookupDirectLink(svc, a.dataset.tmdb).catch(()=>null);
+      if (!url) toast(`Hittade ingen direktlänk – öppnar ${svcLabel(svc)} i stället`);
+    }
+    url = url ? tvLink(svc, url) : APP_HOME[svc];
+    if (!url) return toast("Ingen länk att skicka för den här tjänsten.");
+    toast("Skickar till TV:n…");
+    await tvCall("launch", url);
+    toast("Öppnas på TV:n 📺");
+  }catch(err){ toast(err.message); }
 });
 
 function renderTvSection(){
