@@ -1,6 +1,19 @@
 [
   {
     "date": "2026-11-15",
+    "title": "Nytt gränssnitt",
+    "changes": [
+      "Flikrad längst ner: Nytt, Upptäck, Mina listor och Sök.",
+      "Upptäck samlar Topplistor, Kommande, Tips och Försvinner, med en gemensam rad för att välja tjänst.",
+      "Mina listor visar Vill se, Sett och Borttagna – knappen Visa dolda behövs inte längre.",
+      "Bevakningen ligger under klockan högst upp, med en siffra när det finns något nytt.",
+      "År, språk och vilka tjänster som visas ställs in under Filter i fliken Nytt.",
+      "Dra nedåt högst upp i Nytt för att hämta nytt. Valet Film/Serie gäller i alla flikar.",
+      "Topplistor kan visa filmer och serier tillsammans."
+    ]
+  },
+  {
+    "date": "2026-11-15",
     "title": "Mer i Kommande",
     "changes": [
       "Kommande visar nu även aviserade premiärer från TMDB, ofta månader i förväg – särskilt tjänsternas egna serier och filmer (t.ex. Apple TV+ och Netflix).",

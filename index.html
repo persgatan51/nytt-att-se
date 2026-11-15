@@ -19,7 +19,22 @@
   button.on{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
   .chips{display:flex;gap:6px;overflow-x:auto;padding-top:8px;scrollbar-width:none}
   .chips button{white-space:nowrap}
-  main{padding:4px 14px 40px}
+  main{padding:4px 14px calc(90px + env(safe-area-inset-bottom))}
+  .page,.overlay{display:none}
+  .page.open,.overlay.open{display:block}
+  .iconbtn{position:relative;font-size:16px;padding:6px 11px}
+  .badge{position:absolute;top:-5px;right:-5px;background:var(--acc);color:#111;font-size:11px;font-weight:700;border-radius:999px;padding:0 6px;line-height:17px}
+  .seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;margin-top:8px;gap:2px}
+  .seg button{border:0;background:none;border-radius:9px;padding:7px 2px;font-size:13px;color:var(--mut)}
+  .seg button.on{background:var(--acc);color:#111;font-weight:600}
+  #tabbar{position:fixed;left:0;right:0;bottom:0;z-index:10;display:grid;grid-template-columns:repeat(4,1fr);
+          background:rgba(15,17,21,.97);border-top:1px solid var(--line);padding:6px 0 calc(6px + env(safe-area-inset-bottom))}
+  #tabbar button{border:0;background:none;border-radius:0;padding:4px 0;font-size:11px;color:var(--mut);display:flex;flex-direction:column;align-items:center;gap:2px}
+  #tabbar button span{font-size:20px;line-height:1;filter:grayscale(1);opacity:.7}
+  #tabbar button.on{color:var(--acc);font-weight:600}
+  #tabbar button.on span{filter:none;opacity:1}
+  #ptr{height:0;overflow:hidden;text-align:center;color:var(--mut);font-size:13px;transition:height .15s}
+  #btnFilter.on{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
   h3{font-size:14px;color:var(--mut);margin:18px 0 8px;font-weight:600;text-transform:capitalize}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px}
   .item{background:none;border:0;border-radius:10px;padding:0;text-align:left}
@@ -37,9 +52,6 @@
   .actions a.viaplay{background:#e4003a;border-color:#e4003a}
   .msg{color:var(--mut);text-align:center;padding:30px 10px}
   .more{display:block;margin:20px auto 0}
-  #searchView{position:fixed;inset:0;background:var(--bg);z-index:15;display:none;overflow:auto;
-              padding:env(safe-area-inset-top) 14px calc(30px + env(safe-area-inset-bottom))}
-  #searchView.open{display:block}
   .searchbar{position:sticky;top:0;background:var(--bg);padding:12px 0 10px;z-index:2}
   .searchbar input{flex:1}
   .item.dim{opacity:.45}
@@ -60,7 +72,7 @@
   .actions{display:flex;flex-direction:column;gap:8px;margin-top:14px}
   .actions a{display:block;text-align:center;padding:12px;border-radius:12px;text-decoration:none;color:#fff;font-weight:600;background:var(--card);border:1px solid var(--line)}
   .actions a.tv{background:#1b7f4b;border-color:#1b7f4b}
-  #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);
+  #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);
          background:#2a2f3a;color:var(--fg);padding:10px 16px;border-radius:12px;opacity:0;transition:.25s;z-index:50;
          max-width:90vw;text-align:center;pointer-events:none}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -80,13 +92,7 @@
   a{color:var(--acc)}
   .hrow{display:grid;grid-auto-flow:column;grid-auto-columns:105px;gap:10px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
   #similar h3{margin-top:22px;text-transform:none}
-  #tipsView{position:fixed;inset:0;background:var(--bg);z-index:15;display:none;overflow:auto;
-            padding:env(safe-area-inset-top) 14px calc(30px + env(safe-area-inset-bottom))}
-  #tipsView.open{display:block}
   .wrapchips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
-  .overlay{position:fixed;inset:0;background:var(--bg);z-index:15;display:none;overflow:auto;
-           padding:env(safe-area-inset-top) 14px calc(30px + env(safe-area-inset-bottom))}
-  .overlay.open{display:block}
   .overlay h3,#alerts h3,#forYou h3{text-transform:none}
   .rank{position:absolute;left:6px;top:6px;background:var(--acc);color:#111;font-weight:800;border-radius:8px;padding:1px 8px;font-size:14px}
   .alert{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px;margin-bottom:8px;cursor:pointer}
@@ -108,106 +114,132 @@
 <body>
 <header>
   <div class="row">
-    <h1>Nytt att se</h1>
-    <button id="btnSearch" aria-label="Sök">🔍</button>
-    <button id="btnRefresh" aria-label="Uppdatera">↻</button>
-    <button id="btnSettings" aria-label="Inställningar">⚙︎</button>
+    <h1 id="pageTitle">Nytt att se</h1>
+    <button id="btnBell" class="iconbtn" aria-label="Bevakning">🔔<span id="bellBadge" class="badge" style="display:none"></span></button>
+    <button id="btnSettings" class="iconbtn" aria-label="Inställningar">⚙︎</button>
   </div>
   <div class="chips" id="typeChips">
     <button data-type="all" class="on">Alla</button>
     <button data-type="movie">Filmer</button>
     <button data-type="series">Serier</button>
-    <button id="btnYear"></button>
-    <button id="btnWant">⭐ Vill se</button>
-    <button id="btnTips">💡 Tips</button>
-    <button id="btnTop">🏆 Topplistor</button>
-    <button id="btnUpcoming">📅 Kommande</button>
-    <button id="btnSoon">⏳ Försvinner</button>
-    <button id="btnHidden">Visa dolda</button>
+    <span style="flex:1"></span>
+    <button id="btnFilter">⚙ Filter</button>
+  </div>
+  <div id="discBar" style="display:none">
+    <div class="seg" id="discTabs">
+      <button data-disc="top">Topplistor</button>
+      <button data-disc="up">Kommande</button>
+      <button data-disc="tips">Tips</button>
+      <button data-disc="soon">Försvinner</button>
+    </div>
+    <div class="chips" id="discSvc"></div>
+  </div>
+  <div id="listBar" style="display:none">
+    <div class="seg" id="listTabs">
+      <button data-list="want">⭐ Vill se</button>
+      <button data-list="seen">✓ Sett</button>
+      <button data-list="hidden">🗑 Borttagna</button>
+    </div>
+  </div>
+  <div id="searchBar" class="row" style="display:none;padding-top:8px">
+    <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Sök film, serie eller skådespelare">
   </div>
 </header>
 
 <main>
-  <div id="alerts"></div>
-  <div id="forYou"></div>
-  <div id="status" class="msg">Laddar…</div>
-  <div id="list"></div>
-  <button id="btnMore" class="more" style="display:none">Visa äldre</button>
-  <p class="tip" id="filterNote" style="text-align:center"></p>
-  <p class="tip" id="usage" style="text-align:center"></p>
+  <section id="pageNew" class="page open">
+    <div id="ptr">↓ Dra för att uppdatera</div>
+    <div id="forYou"></div>
+    <div id="status" class="msg">Laddar…</div>
+    <div id="list"></div>
+    <button id="btnMore" class="more" style="display:none">Visa äldre</button>
+    <p class="tip" id="filterNote" style="text-align:center"></p>
+    <p class="tip" id="usage" style="text-align:center"></p>
+  </section>
+
+  <section id="pageDisc" class="page">
+    <div id="topView" class="overlay">
+      <div class="wrapchips" id="topType">
+        <button data-toptype="movie">Filmer</button>
+        <button data-toptype="series">Serier</button>
+      </div>
+      <div id="topStatus" class="msg"></div>
+      <div id="topResults" class="grid"></div>
+      <p class="tip" id="topNote" style="text-align:center"></p>
+    </div>
+    <div id="upView" class="overlay">
+      <div id="upStatus" class="msg"></div>
+      <div id="upResults"></div>
+      <p class="tip" id="upNote" style="text-align:center"></p>
+    </div>
+    <div id="tipsView" class="overlay">
+      <div class="wrapchips" id="tipsType">
+        <button data-ttype="movie">Filmer</button>
+        <button data-ttype="tv">Serier</button>
+      </div>
+      <div class="wrapchips" id="tipsGenres"></div>
+      <div class="wrapchips" id="tipsSort">
+        <button data-tsort="pop">Populärt</button>
+        <button data-tsort="top">Högst betyg</button>
+        <button data-tsort="new">Nyast</button>
+        <button data-tsort="random">🎲 Överraska mig</button>
+      </div>
+      <div id="tipsStatus" class="msg">Välj en genre.</div>
+      <div id="tipsResults" class="grid"></div>
+      <button id="tipsMore" class="more" style="display:none">Visa fler</button>
+      <p class="tip" id="tipsNote" style="text-align:center"></p>
+    </div>
+    <div id="soonView" class="overlay">
+      <div id="soonStatus" class="msg"></div>
+      <div id="soonResults"></div>
+      <p class="tip" id="soonNote" style="text-align:center"></p>
+    </div>
+  </section>
+
+  <section id="pageLists" class="page">
+    <div id="listStatus" class="msg"></div>
+    <div id="listGrid" class="grid"></div>
+  </section>
+
+  <section id="pageSearch" class="page">
+    <div id="searchView" class="overlay">
+      <div id="searchStatus" class="msg">Sök på titel eller skådespelare.</div>
+      <div id="searchResults"></div>
+    </div>
+  </section>
 </main>
 
-<div id="searchView" class="overlay">
-  <div class="row searchbar">
-    <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Sök film, serie eller skådespelare">
-    <button id="closeSearch">Stäng</button>
-  </div>
-  <div id="searchStatus" class="msg"></div>
-  <div id="searchResults"></div>
-</div>
+<nav id="tabbar">
+  <button data-tab="new" class="on"><span>✨</span>Nytt</button>
+  <button data-tab="disc"><span>🧭</span>Upptäck</button>
+  <button data-tab="lists"><span>⭐</span>Mina listor</button>
+  <button data-tab="search"><span>🔍</span>Sök</button>
+</nav>
 
-<div id="tipsView" class="overlay">
-  <div class="row searchbar">
-    <h1 style="font-size:18px">💡 Tips efter genre</h1>
-    <button id="closeTips">Stäng</button>
+<div class="sheet" id="alertsSheet"><div class="panel"><div class="pad">
+  <h2>🔔 Bevakning</h2>
+  <div id="alerts"></div>
+  <div class="actions">
+    <a href="#" id="clearAlerts">Rensa alla</a>
+    <a href="#" id="closeAlerts">Stäng</a>
   </div>
-  <div class="wrapchips" id="tipsType">
-    <button data-ttype="movie">Filmer</button>
-    <button data-ttype="tv">Serier</button>
-  </div>
-  <div class="wrapchips" id="tipsGenres"></div>
-  <div class="wrapchips" id="tipsSort">
-    <button data-tsort="pop">Populärt</button>
-    <button data-tsort="top">Högst betyg</button>
-    <button data-tsort="new">Nyast</button>
-    <button data-tsort="random">🎲 Överraska mig</button>
-  </div>
-  <div id="tipsStatus" class="msg">Välj en genre.</div>
-  <div id="tipsResults" class="grid"></div>
-  <button id="tipsMore" class="more" style="display:none">Visa fler</button>
-  <p class="tip" id="tipsNote" style="text-align:center"></p>
-</div>
+  <p class="tip">Bevakningen säger till när något på Vill se dyker upp på dina tjänster eller snart försvinner, och när serier du sett eller vill se får en ny säsong.</p>
+</div></div></div>
 
-<div id="topView" class="overlay">
-  <div class="row searchbar">
-    <h1 style="font-size:18px">🏆 Topplistor</h1>
-    <button data-close>Stäng</button>
+<div class="sheet" id="filters"><div class="panel"><div class="pad">
+  <h2>Filter</h2>
+  <label class="chk"><input type="checkbox" id="fYearOn"> Bara titlar från år</label>
+  <input id="fYear" type="number" min="1900" max="2100">
+  <label class="chk" style="margin-top:14px"><input type="checkbox" id="fLangOn"> Bara valda originalspråk</label>
+  <p class="tip" style="margin-top:0">Vilka språk väljer du under ⚙︎.</p>
+  <label>Visa titlar från</label>
+  <div id="fSvcs" class="langgrid"></div>
+  <div class="actions">
+    <a href="#" class="primary" id="fApply">Visa</a>
+    <a href="#" id="fRefresh">↻ Hämta nytt nu</a>
+    <a href="#" id="fClose">Stäng</a>
   </div>
-  <div class="wrapchips" id="topSvc"></div>
-  <div class="wrapchips" id="topType">
-    <button data-toptype="movie">Filmer</button>
-    <button data-toptype="series">Serier</button>
-  </div>
-  <div id="topStatus" class="msg"></div>
-  <div id="topResults" class="grid"></div>
-  <p class="tip" id="topNote" style="text-align:center"></p>
-</div>
-
-<div id="upView" class="overlay">
-  <div class="row searchbar">
-    <h1 style="font-size:18px">📅 Kommande</h1>
-    <button data-close>Stäng</button>
-  </div>
-  <div class="wrapchips" id="upSvc"></div>
-  <div class="wrapchips" id="upType">
-    <button data-uptype="all">Alla</button>
-    <button data-uptype="movie">Filmer</button>
-    <button data-uptype="series">Serier</button>
-  </div>
-  <div id="upStatus" class="msg"></div>
-  <div id="upResults"></div>
-  <p class="tip" id="upNote" style="text-align:center"></p>
-</div>
-
-<div id="soonView" class="overlay">
-  <div class="row searchbar">
-    <h1 style="font-size:18px">⏳ Försvinner snart</h1>
-    <button data-close>Stäng</button>
-  </div>
-  <div id="soonStatus" class="msg"></div>
-  <div id="soonResults"></div>
-  <p class="tip" id="soonNote" style="text-align:center"></p>
-</div>
+</div></div></div>
 
 <div class="sheet" id="quick"><div class="panel"><div class="pad" id="quickBody"></div></div></div>
 
@@ -326,7 +358,7 @@ function setMark(id, it, status){
   queueSync(); exportWatch();
 }
 let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
-let state = { type:"all", svc:new Set(cfg.services), showHidden:false,
+let state = { tab:"new", type:"all", svc:new Set(cfg.services), showHidden:false,
               shows:new Map(), cursor:null, hasMore:false };
 
 // ---------- Streaming Availability API ----------
@@ -553,7 +585,6 @@ function dayLabel(ts){
 function render(){
   const listEl = document.getElementById("list"), status = document.getElementById("status");
   updateWantChip(); renderAlerts(); renderForYou();
-  if (state.view === "want") return renderWant(listEl, status);
   let filteredOut = 0;
   const items = [...state.shows.entries()].filter(([id,it]) => {
       if (state.type!=="all" && it.show.showType!==state.type) return false;
@@ -585,30 +616,7 @@ function render(){
   showUsage();
 }
 
-function renderWant(listEl, status){
-  const list = Object.entries(marks).filter(([,m]) => m.status === "want" && m.item)
-    .filter(([,m]) => state.type === "all" || m.item.show.showType === state.type)
-    .sort((a,b) => b[1].t - a[1].t);
-  listEl.innerHTML = "";
-  $("filterNote").textContent = ""; $("btnMore").style.display = "none";
-  status.style.display = list.length ? "none" : "";
-  status.textContent = "Inget sparat än. Öppna en titel och tryck på ⭐ Vill se.";
-  if (!list.length) return;
-  const h = document.createElement("h3"); h.textContent = `Vill se (${list.length})`; listEl.appendChild(h);
-  const g = document.createElement("div"); g.className = "grid"; listEl.appendChild(g);
-  for (const [key, m] of list){
-    // Använd färsk data om titeln finns i den aktuella listan, annars den sparade kopian.
-    const live = [...state.shows.entries()].find(([id,it]) => markKey(id,it) === key);
-    g.appendChild(live ? card(live[0], live[1]) : card(key, m.item));
-  }
-}
-
-function updateWantChip(){
-  const n = Object.values(marks).filter(m => m.status === "want").length;
-  const b = $("btnWant"); if (!b) return;
-  b.textContent = `⭐ Vill se${n ? " ("+n+")" : ""}`;
-  b.classList.toggle("on", state.view === "want");
-}
+function updateWantChip(){}
 
 function card(id, it){
   const s = it.show, b = document.createElement("button"); b.className="item";
@@ -794,6 +802,7 @@ function redrawOverlays(){
   if ($("searchView").classList.contains("open") && redrawSearch) redrawSearch();
   if ($("tipsView").classList.contains("open") && redrawTips) redrawTips();
   for (const [id, f] of Object.entries(redraws)) if ($(id).classList.contains("open")) f();
+  if (state.tab === "lists") renderLists();
 }
 const redraws = {};
 
@@ -803,8 +812,7 @@ const tvCbs = {};
 window.__tvCb = (id, ok, data) => { const f = tvCbs[id]; delete tvCbs[id]; f && f(ok, data); };
 window.__tvBack = () => {
   if (document.querySelector(".sheet.open")){ closeSheets(); return true; }
-  const ov = [...document.querySelectorAll(".overlay.open")].pop();
-  if (ov){ ov.id === "searchView" ? closeSearch() : ov.classList.remove("open"); return true; }
+  if (state.tab && state.tab !== "new"){ showTab("new"); return true; }
   return false;
 };
 function tvCall(method, ...args){
@@ -994,8 +1002,8 @@ async function runSearch(q){
   }catch(e){ if (seq === searchSeq){ st.textContent = e.message; st.style.display=""; } }
 }
 
-function openSearch(){ $("searchView").classList.add("open"); setTimeout(()=>$("q").focus(), 50); }
-function closeSearch(){ $("searchView").classList.remove("open"); $("q").blur(); }
+function openSearch(){ showTab("search"); }
+function closeSearch(){ $("q").blur(); showTab("new"); }
 let searchTimer;
 document.addEventListener("input", e => {
   if (e.target.id !== "q") return;
@@ -1010,27 +1018,30 @@ document.addEventListener("keydown", e => {
 const tips = Object.assign({ type:"movie", genre:null, sort:"pop" }, store.get("tips", {}));
 let tipsSeq = 0, tipsPage = 1, tipsItems = [], redrawTips = null;
 const genreCache = {}, provListCache = {};
-async function myProviderIds(type){
+async function myProviderIds(type, svc){
   if (!provListCache[type])
     provListCache[type] = (await tmdbGet(`/watch/providers/${type}`, { watch_region:"SE" })).results || [];
-  return provListCache[type].filter(p => mine().some(s => s.match.test((p.provider_name||"").trim()))).map(p => p.provider_id);
+  const svcs = svc && svc !== "all" ? mine().filter(s => s.key === svc) : mine();
+  return provListCache[type].filter(p => svcs.some(s => s.match.test((p.provider_name||"").trim()))).map(p => p.provider_id);
 }
 async function genres(type){
   if (!genreCache[type]) genreCache[type] = (await tmdbGet(`/genre/${type}/list`, { language:"sv-SE" })).genres || [];
   return genreCache[type];
 }
+// Film/serie följer valet högst upp; vid "Alla" väljs film eller serie här.
+const tipsType = () => state.type === "movie" ? "movie" : state.type === "series" ? "tv" : tips.type;
 async function openTips(){
-  $("tipsView").classList.add("open");
   if (!cfg.tmdbKey){ $("tipsStatus").textContent = "Tips kräver en TMDB-nyckel under ⚙︎."; return; }
   await drawTipsChips();
   if (tips.genre) loadTips();
 }
 function closeTips(){ $("tipsView").classList.remove("open"); }
 async function drawTipsChips(){
-  document.querySelectorAll("#tipsType [data-ttype]").forEach(b => b.classList.toggle("on", b.dataset.ttype === tips.type));
+  $("tipsType").style.display = state.type === "all" ? "" : "none";
+  document.querySelectorAll("#tipsType [data-ttype]").forEach(b => b.classList.toggle("on", b.dataset.ttype === tipsType()));
   document.querySelectorAll("#tipsSort [data-tsort]").forEach(b => b.classList.toggle("on", b.dataset.tsort === tips.sort));
   try{
-    const list = await genres(tips.type);
+    const list = await genres(tipsType());
     if (tips.genre && !list.some(g => g.id === tips.genre)) tips.genre = null;
     $("tipsGenres").innerHTML = list.map(g => `<button data-genre="${g.id}" class="${g.id===tips.genre?"on":""}">${esc(g.name.charAt(0).toUpperCase()+g.name.slice(1))}</button>`).join("");
     $("tipsGenres").querySelectorAll("[data-genre]").forEach(b => b.onclick = () => {
@@ -1046,7 +1057,7 @@ async function loadTips(more=false){
   if (!more){ tipsPage = 1; tipsItems = []; out.innerHTML = ""; }
   st.textContent = "Letar tips…"; st.style.display = ""; $("tipsMore").style.display = "none";
   try{
-    const type = tips.type, ids = await myProviderIds(type);
+    const type = tipsType(), ids = await myProviderIds(type, disc.svc);
     if (!ids.length){ st.textContent = "Hittade inga av dina tjänster hos TMDB."; return; }
     const df = type === "movie" ? "primary_release_date" : "first_air_date";
     const minVotes = type === "movie" ? 300 : 150;
@@ -1092,8 +1103,6 @@ async function loadTips(more=false){
     $("tipsNote").textContent = cfg.langOn ? "Språkfiltret från ⚙︎ gäller även tipsen." : "";
   }catch(e){ if (seq === tipsSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
-$("btnTips").onclick = openTips;
-$("closeTips").onclick = closeTips;
 document.querySelectorAll("#tipsType [data-ttype]").forEach(b => b.onclick = async () => {
   if (tips.type === b.dataset.ttype) return;
   tips.type = b.dataset.ttype; store.set("tips", tips);
@@ -1135,24 +1144,24 @@ const shortDate = ts => new Date(ts*1000).toLocaleDateString("sv-SE",{ day:"nume
 const SA_TOP = ["netflix","prime","disney","apple","hbo"];
 const topCfg = Object.assign({ svc:null, type:"movie" }, store.get("top", {}));
 let topSeq = 0;
+// Topplistor gäller en tjänst i taget; "Alla tjänster" ersätts med den första.
+const topType = () => state.type;
 function openTop(){
-  $("topView").classList.add("open");
-  if (!topCfg.svc || !cfg.services.includes(topCfg.svc)) topCfg.svc = cfg.services[0] || null;
+  if (disc.svc === "all" || !cfg.services.includes(disc.svc)){ disc.svc = cfg.services[0] || "all"; store.set("disc", disc); drawDiscSvc(); }
+  topCfg.svc = disc.svc === "all" ? null : disc.svc;
   drawTopChips(); loadTop();
 }
 function drawTopChips(){
-  $("topSvc").innerHTML = mine().map(s=>`<button data-tsvc="${s.key}" class="${s.key===topCfg.svc?"on":""}">${esc(s.label)}</button>`).join("");
-  $("topSvc").querySelectorAll("[data-tsvc]").forEach(b => b.onclick = () => {
-    topCfg.svc = b.dataset.tsvc; store.set("top", topCfg); drawTopChips(); loadTop(); });
-  document.querySelectorAll("#topType [data-toptype]").forEach(b => b.classList.toggle("on", b.dataset.toptype === topCfg.type));
+  $("topType").style.display = "none";
+  document.querySelectorAll("#topType [data-toptype]").forEach(b => b.classList.toggle("on", b.dataset.toptype === topType()));
 }
 async function topList(svc, type){
-  const key = `top2|${svc}|${type}`, c = store.get(key, null);
+  const key = `top3|${svc}|${type}`, c = store.get(key, null);
   if (c && Date.now() - c.t < 12*36e5) return c;
   let res = null;
   if (cfg.saKey && SA_TOP.includes(svc)){
     try{
-      const r = await sa("/shows/top", { country:COUNTRY, service:svc, show_type:type });
+      const r = await sa("/shows/top", { country:COUNTRY, service:svc, ...(type === "all" ? {} : { show_type:type }) });
       const shows = Array.isArray(r) ? r : (r.shows || []);
       if (shows.length) res = { t:Date.now(), src:"sa", items:shows.map(saItem) };
     }catch(e){ console.warn("Topplista:", e); }
@@ -1160,14 +1169,20 @@ async function topList(svc, type){
   }
   if (!res){
     if (!cfg.tmdbKey) throw new Error("Topplistor kräver en Streaming Availability- eller TMDB-nyckel under ⚙︎.");
-    const t = type==="movie" ? "movie" : "tv", svcObj = SERVICES.find(s=>s.key===svc);
-    await myProviderIds(t);
-    const ids = provListCache[t].filter(p=>svcObj.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
-    if (!ids.length) throw new Error(`Hittade inte ${svcObj.label} hos TMDB.`);
-    const r = await tmdbGet(`/discover/${t}`, { watch_region:"SE", language:"sv-SE", include_adult:"false",
-      with_watch_providers:ids.join("|"), with_watch_monetization_types:"flatrate|free|ads",
-      sort_by:"popularity.desc", "vote_count.gte":10 });
-    const items = (r.results||[]).filter(x=>x.poster_path).slice(0,20).map(x=>{
+    const svcObj = SERVICES.find(s=>s.key===svc);
+    const types = type === "all" ? ["movie","tv"] : [type === "movie" ? "movie" : "tv"];
+    const found = [];
+    for (const t of types){
+      await myProviderIds(t);
+      const ids = provListCache[t].filter(p=>svcObj.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
+      if (!ids.length) continue;
+      const r = await tmdbGet(`/discover/${t}`, { watch_region:"SE", language:"sv-SE", include_adult:"false",
+        with_watch_providers:ids.join("|"), with_watch_monetization_types:"flatrate|free|ads",
+        sort_by:"popularity.desc", "vote_count.gte":10 });
+      found.push(...(r.results||[]).filter(x=>x.poster_path).map(x=>({ x, t })));
+    }
+    if (!found.length) throw new Error(`Hittade inte ${svcObj.label} hos TMDB.`);
+    const items = found.sort((a,b)=>(b.x.popularity||0)-(a.x.popularity||0)).slice(0,20).map(({ x, t })=>{
       const it = searchItem(x, t);
       it.pending = false; it.added[svc] = 0; it.approx[svc] = true;
       it.links[svc] = `https://www.themoviedb.org/${it.show.tmdbId}/watch?locale=SE`;
@@ -1183,7 +1198,7 @@ async function loadTop(){
   if (!topCfg.svc){ st.textContent = "Välj streamingtjänster under ⚙︎."; st.style.display = ""; return; }
   st.textContent = "Hämtar topplista…"; st.style.display = "";
   try{
-    const r = await topList(topCfg.svc, topCfg.type);
+    const r = await topList(topCfg.svc, topType());
     if (seq !== topSeq) return;
     const items = r.items.map(freshItem);
     items.forEach(it => { if (!Object.keys(it.added).length) it.added[topCfg.svc] = 0; });
@@ -1205,10 +1220,8 @@ async function loadTop(){
       : `Det populäraste på ${svcLabel(topCfg.svc)} just nu enligt TMDB${SA_TOP.includes(topCfg.svc) && !cfg.saKey ? " – med en Streaming Availability-nyckel visas tjänstens egen topp 10" : ""}.`;
   }catch(e){ if (seq === topSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
-$("btnTop").onclick = openTop;
 document.querySelectorAll("#topType [data-toptype]").forEach(b => b.onclick = () => {
   topCfg.type = b.dataset.toptype; store.set("top", topCfg); drawTopChips(); loadTop(); });
-document.querySelectorAll(".overlay [data-close]").forEach(b => b.onclick = () => b.closest(".overlay").classList.remove("open"));
 
 // ---------- Försvinner snart (Streaming Availability, change_type=expiring) ----------
 const expKey = () => "expiring|" + mySa().map(s=>s.key).join(",");
@@ -1248,7 +1261,7 @@ function leaveLabel(ts){
   return "Försvinner " + d.toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" });
 }
 let soonSeq = 0;
-function openSoon(){ $("soonView").classList.add("open"); loadSoon(); }
+function openSoon(){ loadSoon(); }
 async function loadSoon(){
   const seq = ++soonSeq, st = $("soonStatus"), out = $("soonResults");
   out.innerHTML = ""; $("soonNote").textContent = "";
@@ -1263,6 +1276,8 @@ async function loadSoon(){
     const byId = new Map(), old = Date.now()/1000 - 86400;
     for (const x of r?.items || []){
       if ((x.ts && x.ts < old) || !cfg.services.includes(x.svc)) continue;
+      if (disc.svc !== "all" && x.svc !== disc.svc) continue;
+      if (state.type !== "all" && x.show.showType !== state.type) continue;
       let it = byId.get(x.show.tmdbId);
       if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, leaves:{} }; byId.set(x.show.tmdbId, it); }
       it.added[x.svc] = 0; it.links[x.svc] = x.link || it.links[x.svc]; it.leaves[x.svc] = x.ts;
@@ -1298,7 +1313,7 @@ async function loadSoon(){
     $("soonNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Tjänsterna meddelar inte alltid i förväg, så listan är inte komplett.`;
   }catch(e){ if (seq === soonSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
-$("btnSoon").onclick = openSoon;
+
 
 // ---------- Kommande (Streaming Availability, change_type=upcoming) ----------
 // Nya titlar och nya säsonger som tjänsterna aviserat. Hämtas för alla dina tjänster på en gång
@@ -1413,18 +1428,7 @@ function comeLabel(ts){
   return d.toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" }).replace(/^./, c => c.toUpperCase());
 }
 let upSeq = 0;
-function openUpcoming(){
-  $("upView").classList.add("open");
-  if (upCfg.svc !== "all" && !mine().some(s => s.key === upCfg.svc && canUpcoming(s))) upCfg.svc = "all";
-  drawUpChips(); loadUpcoming();
-}
-function drawUpChips(){
-  $("upSvc").innerHTML = [`<button data-usvc="all" class="${upCfg.svc==="all"?"on":""}">Alla tjänster</button>`,
-    ...mine().filter(canUpcoming).map(s => `<button data-usvc="${s.key}" class="${s.key===upCfg.svc?"on":""}">${esc(s.label)}</button>`)].join("");
-  $("upSvc").querySelectorAll("[data-usvc]").forEach(b => b.onclick = () => {
-    upCfg.svc = b.dataset.usvc; store.set("up", upCfg); drawUpChips(); redraws.upView && redraws.upView(); });
-  document.querySelectorAll("#upType [data-uptype]").forEach(b => b.classList.toggle("on", b.dataset.uptype === upCfg.type));
-}
+function openUpcoming(){ loadUpcoming(); }
 async function loadUpcoming(){
   const seq = ++upSeq, st = $("upStatus"), out = $("upResults");
   out.innerHTML = ""; $("upNote").textContent = "";
@@ -1444,8 +1448,8 @@ async function loadUpcoming(){
       const byId = new Map();
       for (const x of r.items){
         if ((x.ts && x.ts < old) || !cfg.services.includes(x.svc)) continue;
-        if (upCfg.svc !== "all" && x.svc !== upCfg.svc) continue;
-        if (upCfg.type !== "all" && x.show.showType !== upCfg.type) continue;
+        if (disc.svc !== "all" && x.svc !== disc.svc) continue;
+        if (state.type !== "all" && x.show.showType !== state.type) continue;
         const id = x.show.tmdbId + "|" + (x.season || "");
         let it = byId.get(id);
         if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, ts:x.ts, season:x.season, movie:x.movie }; byId.set(id, it); }
@@ -1470,15 +1474,13 @@ async function loadUpcoming(){
         }
       }
       st.style.display = list.length ? "none" : "";
-      if (!list.length) st.textContent = upCfg.svc === "all" ? "Inget aviserat på dina tjänster just nu." : `Inget aviserat på ${svcLabel(upCfg.svc)} just nu.`;
+      if (!list.length) st.textContent = disc.svc === "all" ? "Inget aviserat på dina tjänster just nu." : `Inget aviserat på ${svcLabel(disc.svc)} just nu.`;
     };
     draw(); redraws.upView = draw;
     $("upNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Datum från tjänsterna (Streaming Availability) när de finns, annars aviserade premiärer från TMDB – mest tjänsternas egna serier och filmer. Tryck ⭐ Vill se på något som kommer, så säger bevakningen till när det finns att se.`;
   }catch(e){ if (seq === upSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
-$("btnUpcoming").onclick = openUpcoming;
-document.querySelectorAll("#upType [data-uptype]").forEach(b => b.onclick = () => {
-  upCfg.type = b.dataset.uptype; store.set("up", upCfg); drawUpChips(); redraws.upView && redraws.upView(); });
+
 
 // ---------- Bevakning: Vill se dyker upp, ny säsong, försvinner snart ----------
 let alerts = store.get("alerts", []);   // { id, key, kind, text, t, item, done }
@@ -1491,15 +1493,16 @@ function addAlert(a){
 function renderAlerts(){
   const el = $("alerts"); if (!el) return;
   const list = alerts.filter(a => !a.done);
-  if (state.view === "want" || !list.length){ el.innerHTML = ""; return; }
-  el.innerHTML = `<h3>🔔 Bevakning</h3>` + list.map(a => {
+  updateBell(list.length);
+  if (!list.length){ el.innerHTML = `<p class="m">Inget nytt just nu.</p>`; return; }
+  el.innerHTML = list.map(a => {
     const p = a.item && poster(a.item.show);
     return `<div class="alert" data-aid="${esc(a.id)}">${p ? `<img src="${esc(p)}" alt="">` : ""}<div class="atxt">${esc(a.text)}</div><button data-adismiss="${esc(a.id)}" aria-label="Ta bort">✕</button></div>`;
   }).join("");
   el.querySelectorAll("[data-aid]").forEach(d => d.onclick = e => {
     if (e.target.closest("[data-adismiss]")) return;
     const a = alerts.find(x => x.id === d.dataset.aid);
-    if (a?.item) openDetail("tmdb:"+a.item.show.tmdbId, freshItem(a.item));
+    if (a?.item){ closeSheets(); openDetail("tmdb:"+a.item.show.tmdbId, freshItem(a.item)); }
   });
   el.querySelectorAll("[data-adismiss]").forEach(b => b.onclick = () => {
     const a = alerts.find(x => x.id === b.dataset.adismiss); if (a) a.done = true;
@@ -1585,7 +1588,7 @@ function exportWatch(){
 let forYouBusy = false;
 async function renderForYou(){
   const el = $("forYou"); if (!el) return;
-  if (state.view === "want" || !cfg.tmdbKey){ el.innerHTML = ""; return; }
+  if (!cfg.tmdbKey){ el.innerHTML = ""; return; }
   const base = Object.values(marks).filter(m => (m.status === "want" || m.status === "seen") && m.item?.show?.tmdbId)
     .sort((a,b) => b.t - a.t).slice(0, 8);
   if (!base.length){ el.innerHTML = ""; return; }
@@ -1750,21 +1753,127 @@ function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classLi
 document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
 
 // filter
+// Film/serie gäller i alla flikar.
 document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
   state.type=b.dataset.type;
-  document.querySelectorAll("#typeChips [data-type]").forEach(x=>x.classList.toggle("on",x===b)); render(); });
-document.getElementById("btnHidden").onclick = e=>{ state.showHidden=!state.showHidden; e.target.classList.toggle("on",state.showHidden); render(); };
-document.getElementById("btnRefresh").onclick = ()=>load(true);
-document.getElementById("btnSearch").onclick = openSearch;
-document.getElementById("btnWant").onclick = () => { state.view = state.view === "want" ? "list" : "want"; render(); window.scrollTo(0,0); };
-document.getElementById("closeSearch").onclick = closeSearch;
-function updateYearBtn(){
-  const b = document.getElementById("btnYear");
-  b.textContent = `Från ${cfg.minYear}`; b.classList.toggle("on", cfg.yearOn);
+  document.querySelectorAll("#typeChips [data-type]").forEach(x=>x.classList.toggle("on",x===b));
+  render();
+  if (state.tab === "disc") openDisc(disc.tab);
+  if (state.tab === "lists") renderLists();
+});
+
+// ---------- Flikar: Nytt, Upptäck, Mina listor, Sök ----------
+const disc = Object.assign({ tab:"top", svc:"all" }, store.get("disc", {}));
+const lists = { tab:"want" };
+const TITLES = { new:"Nytt att se", disc:"Upptäck", lists:"Mina listor", search:"Sök" };
+function showTab(t){
+  state.tab = t;
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("open"));
+  $({ new:"pageNew", disc:"pageDisc", lists:"pageLists", search:"pageSearch" }[t]).classList.add("open");
+  document.querySelectorAll("#tabbar [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  $("pageTitle").textContent = TITLES[t];
+  $("typeChips").style.display = t === "search" ? "none" : "";
+  $("btnFilter").style.display = t === "new" ? "" : "none";
+  $("discBar").style.display = t === "disc" ? "" : "none";
+  $("listBar").style.display = t === "lists" ? "" : "none";
+  $("searchBar").style.display = t === "search" ? "" : "none";
+  $("searchView").classList.toggle("open", t === "search");
+  document.querySelectorAll("#pageDisc .overlay").forEach(o => o.classList.remove("open"));
+  window.scrollTo(0, 0);
+  if (t === "disc") openDisc(disc.tab);
+  if (t === "lists") renderLists();
+  if (t === "search") setTimeout(() => $("q").focus(), 50); else $("q").blur();
 }
-document.getElementById("btnYear").onclick = ()=>{ cfg.yearOn = !cfg.yearOn; store.set("cfg2",cfg); updateYearBtn();
-  cfg.source==="tmdb" ? load() : render(); };  // i TMDB-läget styr året vad som hämtas
+document.querySelectorAll("#tabbar [data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+function drawDiscSvc(){
+  const svcs = disc.tab === "up" ? mine().filter(canUpcoming) : disc.tab === "soon" ? mySa() : mine();
+  const all = disc.tab !== "top";
+  if (disc.svc !== "all" && !svcs.some(s => s.key === disc.svc)) disc.svc = all ? "all" : (svcs[0]?.key || "all");
+  $("discSvc").innerHTML = [all ? `<button data-dsvc="all" class="${disc.svc==="all"?"on":""}">Alla tjänster</button>` : "",
+    ...svcs.map(s => `<button data-dsvc="${s.key}" class="${s.key===disc.svc?"on":""}">${esc(s.label)}</button>`)].join("");
+  $("discSvc").querySelectorAll("[data-dsvc]").forEach(b => b.onclick = () => {
+    disc.svc = b.dataset.dsvc; store.set("disc", disc); drawDiscSvc(); openDisc(disc.tab, true); });
+}
+function openDisc(tab, keepSvc){
+  disc.tab = tab; store.set("disc", disc);
+  document.querySelectorAll("#discTabs [data-disc]").forEach(b => b.classList.toggle("on", b.dataset.disc === tab));
+  const id = { top:"topView", up:"upView", tips:"tipsView", soon:"soonView" }[tab];
+  document.querySelectorAll("#pageDisc .overlay").forEach(o => o.classList.toggle("open", o.id === id));
+  if (!keepSvc) drawDiscSvc();
+  if (tab === "top") openTop();
+  if (tab === "up") openUpcoming();
+  if (tab === "tips") openTips();
+  if (tab === "soon") openSoon();
+}
+document.querySelectorAll("#discTabs [data-disc]").forEach(b => b.onclick = () => { openDisc(b.dataset.disc); window.scrollTo(0, 0); });
+
+// Mina listor: Vill se, Sett, Borttagna
+function renderLists(){
+  const counts = { want:0, seen:0, hidden:0 };
+  for (const m of Object.values(marks)) if (m.item && counts[m.status] != null) counts[m.status]++;
+  const lbl = { want:"⭐ Vill se", seen:"✓ Sett", hidden:"🗑 Borttagna" };
+  document.querySelectorAll("#listTabs [data-list]").forEach(b => {
+    b.classList.toggle("on", b.dataset.list === lists.tab);
+    b.textContent = lbl[b.dataset.list] + (counts[b.dataset.list] ? ` (${counts[b.dataset.list]})` : "");
+  });
+  const items = Object.entries(marks).filter(([,m]) => m.status === lists.tab && m.item)
+    .filter(([,m]) => state.type === "all" || m.item.show.showType === state.type)
+    .sort((a,b) => b[1].t - a[1].t);
+  const g = $("listGrid"), st = $("listStatus");
+  g.innerHTML = "";
+  st.style.display = items.length ? "none" : "";
+  st.textContent = { want:"Inget sparat än. Tryck ⭐ Vill se på en titel.", seen:"Inget markerat som sett än.", hidden:"Inget borttaget." }[lists.tab];
+  for (const [key, m] of items){
+    const live = [...state.shows.entries()].find(([id,it]) => markKey(id,it) === key);
+    g.appendChild(live ? card(live[0], live[1]) : card(key, m.item));
+  }
+}
+document.querySelectorAll("#listTabs [data-list]").forEach(b => b.onclick = () => { lists.tab = b.dataset.list; renderLists(); });
+
+// Bevakning: klockan högst upp
+function updateBell(n){ const b = $("bellBadge"); b.textContent = n; b.style.display = n ? "" : "none"; }
+$("btnBell").onclick = () => { renderAlerts(); $("alertsSheet").classList.add("open"); };
+$("closeAlerts").onclick = e => { e.preventDefault(); closeSheets(); };
+$("clearAlerts").onclick = e => { e.preventDefault(); alerts.forEach(a => a.done = true); store.set("alerts", alerts); renderAlerts(); };
+
+// Filter (bara fliken Nytt)
+function updateYearBtn(){
+  const on = cfg.yearOn || cfg.langOn || cfg.services.some(k => !state.svc.has(k));
+  const n = [cfg.yearOn, cfg.langOn, cfg.services.some(k => !state.svc.has(k))].filter(Boolean).length;
+  $("btnFilter").classList.toggle("on", on);
+  $("btnFilter").textContent = "⚙ Filter" + (n ? ` (${n})` : "");
+}
+$("btnFilter").onclick = () => {
+  $("fYearOn").checked = cfg.yearOn; $("fYear").value = cfg.minYear; $("fLangOn").checked = cfg.langOn;
+  $("fSvcs").innerHTML = mine().map(s => `<label class="chk"><input type="checkbox" value="${s.key}" ${state.svc.has(s.key)?"checked":""}> ${esc(s.label)}</label>`).join("");
+  $("filters").classList.add("open");
+};
+$("fApply").onclick = e => { e.preventDefault();
+  cfg.yearOn = $("fYearOn").checked; cfg.minYear = +$("fYear").value || cfg.minYear; cfg.langOn = $("fLangOn").checked;
+  store.set("cfg2", cfg);
+  state.svc = new Set([...document.querySelectorAll("#fSvcs input:checked")].map(x => x.value));
+  closeSheets(); updateYearBtn(); load(); };
+$("fRefresh").onclick = e => { e.preventDefault(); closeSheets(); load(true); };
+$("fClose").onclick = e => { e.preventDefault(); closeSheets(); };
 updateYearBtn();
+
+// Dra nedåt högst upp i Nytt för att hämta nytt.
+(() => {
+  let y0 = null, dy = 0;
+  const ptr = $("ptr");
+  window.addEventListener("touchstart", e => { y0 = state.tab === "new" && window.scrollY <= 0 && !document.querySelector(".sheet.open") ? e.touches[0].clientY : null; dy = 0; }, { passive:true });
+  window.addEventListener("touchmove", e => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (dy > 10){ ptr.style.height = Math.min(dy/2, 44) + "px"; ptr.style.lineHeight = Math.min(dy/2, 44) + "px";
+      ptr.textContent = dy > 90 ? "↻ Släpp för att uppdatera" : "↓ Dra för att uppdatera"; }
+  }, { passive:true });
+  window.addEventListener("touchend", () => {
+    if (y0 != null && dy > 90) load(true);
+    y0 = null; dy = 0; ptr.style.height = "0";
+  });
+})();
 document.getElementById("btnMore").onclick = ()=>load(false,true);
 
 // inställningar

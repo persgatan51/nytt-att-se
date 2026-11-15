@@ -3,6 +3,8 @@
 Webbapp som visar vad som nyss lagts upp på dina streamingtjänster i Sverige, med datum och direktlänk till titeln i tjänsten. Android-appen (mappen `android/`) visar webbappen, kan starta titlar på Google TV och skickar notiser från bevakningen.
 
 ## Funktioner
+Appen har fyra flikar längst ner: **Nytt**, **Upptäck** (topplistor, kommande, tips, försvinner), **Mina listor** och **Sök**. Bevakningen ligger under 🔔 högst upp.
+
 - **Nyheter** per dag, filter för film/serie, år och originalspråk.
 - **Sök** titlar och skådespelare.
 - **⭐ Vill se / ✓ Sett / 🗑 Ta bort** på varje titel (långt tryck ger snabbval).
