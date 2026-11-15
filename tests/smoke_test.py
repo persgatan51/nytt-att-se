@@ -44,6 +44,13 @@ def tmdb(route):
 def sa(route):
     u = route.request.url; calls.append(u)
     if "/shows/top" in u: body=[sa_show(i) for i in range(500,510)]
+    elif "change_type=upcoming" in u:
+        now=int(time.time())
+        if "item_type=season" in u:
+            body={"changes":[{"showId":"s9","service":{"id":"netflix"},"season":2,"timestamp":now+86400*5}],"shows":{"s9":sa_show(901,"series")},"hasMore":False}
+        else:
+            body={"changes":[{"showId":"s7","service":{"id":"netflix"},"timestamp":now+86400*2},{"showId":"s8","service":{"id":"hbo"}}],
+                  "shows":{"s7":sa_show(700),"s8":sa_show(800)},"hasMore":False}
     elif "change_type=expiring" in u:
         now=int(time.time())
         body={"changes":[{"showId":"s1","service":{"id":"netflix"},"timestamp":now+86400*3,"link":"https://www.netflix.com/title/600"},
@@ -112,6 +119,13 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.locator("#soonResults .item").first.click(); pg.wait_for_timeout(500)
     check("Försvinner från Netflix" in pg.locator("#detailBody").inner_text(), "detaljvyn visar när titeln försvinner")
     pg.evaluate("closeSheets()"); pg.locator("#soonView [data-close]").click()
+
+    pg.click("#btnUpcoming"); pg.wait_for_timeout(800)
+    check(pg.locator("#upResults .item").count() == 2 and "Säsong 2" in pg.locator("#upResults").inner_text(),
+          "kommande: " + " | ".join(pg.locator('#upResults h3').all_inner_texts()))
+    pg.click("#upType [data-uptype='series']"); pg.wait_for_timeout(200)
+    check(pg.locator("#upResults .item").count() == 1, "kommande: filter på serier")
+    pg.locator("#upView [data-close]").click()
 
     pg.click("#btnSearch"); pg.fill("#q", "film"); pg.wait_for_timeout(1200)
     check(pg.locator("#searchResults .item").count() > 0, "sök")

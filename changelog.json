@@ -1,42 +1,83 @@
 [
-  { "date": "2026-11-15", "title": "Ändringslogg", "changes": [
-    "Ändringsloggen finns under ⚙︎ → 📜 Vad är nytt. En prick på ⚙︎ visar när det finns något nytt."
-  ]},
-  { "date": "2026-11-15", "title": "Topplistor, bevakning och synk", "changes": [
-    "🏆 Topplistor per streamingtjänst – tjänstens egen topp 10 i Sverige för Netflix, Prime Video, HBO Max, Disney+ och Apple TV, annars det populäraste enligt TMDB.",
-    "⏳ Försvinner snart: titlar som snart lämnar dina tjänster, med Vill se-titlar överst.",
-    "🔔 Bevakning: säger till när något på Vill se dyker upp på dina tjänster, när en serie får en ny säsong och när något på Vill se försvinner.",
-    "Notiser från bevakningen i Android-appen, även när appen är stängd.",
-    "✨ För dig: förslag på startsidan utifrån det du markerat.",
-    "Betyg från IMDb, Rotten Tomatoes och Metacritic (kräver OMDb-nyckel).",
-    "Synk av Vill se, Sett och borttagna titlar mellan enheter via GitHub."
-  ]},
-  { "date": "2026-11-15", "title": "Liknande titlar och tips", "changes": [
-    "Liknande titlar på dina tjänster visas längst ner när du öppnar en film eller serie.",
-    "💡 Tips efter genre: välj film eller serie, genre och sortering – eller låt appen överraska dig.",
-    "Nattlig automatisk kontroll av appen med förbättringsförslag."
-  ]},
-  { "date": "2026-11-13", "title": "Markeringar och snabbval", "changes": [
-    "Markera titlar som ⭐ Vill se, ✓ Sett eller 🗑 Ta bort, och se din Vill se-lista.",
-    "Långt tryck på ett kort ger snabbval."
-  ]},
-  { "date": "2026-11-13", "title": "Filter", "changes": [
-    "Filtrera på originalspråk (ersätter regionfiltret).",
-    "Årsfilter med standard från 2025; avslaget visar alla år.",
-    "Bara TMDB-läget hämtar per år så att även äldre år syns."
-  ]},
-  { "date": "2026-11-13", "title": "Sök och TV", "changes": [
-    "Sök efter filmer, serier och skådespelare.",
-    "Android-app som kan starta titlar på Google TV – rätt titel, inte bara appen.",
-    "Skådespelare, regi och trailer i detaljvyn."
-  ]},
-  { "date": "2026-11-13", "title": "Fler tjänster och datakällor", "changes": [
-    "Välj vilka streamingtjänster du har i inställningarna.",
-    "Välj datakälla: RapidAPI (datum när titlar lades upp) eller bara TMDB.",
-    "Apple TV, SkyShowtime, Viaplay och Disney+ tillagda."
-  ]},
-  { "date": "2026-11-13", "title": "Första versionen", "changes": [
-    "Visar nya filmer och serier på Netflix, Prime Video och HBO Max i Sverige.",
-    "Datum för när titlar lades upp och direktlänkar till tjänsten."
-  ]}
+  {
+    "date": "2026-11-15",
+    "title": "Kommande per tjänst",
+    "changes": [
+      "📅 Kommande: se vilka filmer, serier och nya säsonger som är på väg till dina tjänster, per dag.",
+      "Filtrera på tjänst och på film eller serie.",
+      "Markera något som kommer med ⭐ Vill se, så säger bevakningen till när det finns att se."
+    ]
+  },
+  {
+    "date": "2026-11-15",
+    "title": "Ändringslogg",
+    "changes": [
+      "Ändringsloggen finns under ⚙︎ → 📜 Vad är nytt. En prick på ⚙︎ visar när det finns något nytt."
+    ]
+  },
+  {
+    "date": "2026-11-15",
+    "title": "Topplistor, bevakning och synk",
+    "changes": [
+      "🏆 Topplistor per streamingtjänst – tjänstens egen topp 10 i Sverige för Netflix, Prime Video, HBO Max, Disney+ och Apple TV, annars det populäraste enligt TMDB.",
+      "⏳ Försvinner snart: titlar som snart lämnar dina tjänster, med Vill se-titlar överst.",
+      "🔔 Bevakning: säger till när något på Vill se dyker upp på dina tjänster, när en serie får en ny säsong och när något på Vill se försvinner.",
+      "Notiser från bevakningen i Android-appen, även när appen är stängd.",
+      "✨ För dig: förslag på startsidan utifrån det du markerat.",
+      "Betyg från IMDb, Rotten Tomatoes och Metacritic (kräver OMDb-nyckel).",
+      "Synk av Vill se, Sett och borttagna titlar mellan enheter via GitHub."
+    ]
+  },
+  {
+    "date": "2026-11-15",
+    "title": "Liknande titlar och tips",
+    "changes": [
+      "Liknande titlar på dina tjänster visas längst ner när du öppnar en film eller serie.",
+      "💡 Tips efter genre: välj film eller serie, genre och sortering – eller låt appen överraska dig.",
+      "Nattlig automatisk kontroll av appen med förbättringsförslag."
+    ]
+  },
+  {
+    "date": "2026-11-13",
+    "title": "Markeringar och snabbval",
+    "changes": [
+      "Markera titlar som ⭐ Vill se, ✓ Sett eller 🗑 Ta bort, och se din Vill se-lista.",
+      "Långt tryck på ett kort ger snabbval."
+    ]
+  },
+  {
+    "date": "2026-11-13",
+    "title": "Filter",
+    "changes": [
+      "Filtrera på originalspråk (ersätter regionfiltret).",
+      "Årsfilter med standard från 2025; avslaget visar alla år.",
+      "Bara TMDB-läget hämtar per år så att även äldre år syns."
+    ]
+  },
+  {
+    "date": "2026-11-13",
+    "title": "Sök och TV",
+    "changes": [
+      "Sök efter filmer, serier och skådespelare.",
+      "Android-app som kan starta titlar på Google TV – rätt titel, inte bara appen.",
+      "Skådespelare, regi och trailer i detaljvyn."
+    ]
+  },
+  {
+    "date": "2026-11-13",
+    "title": "Fler tjänster och datakällor",
+    "changes": [
+      "Välj vilka streamingtjänster du har i inställningarna.",
+      "Välj datakälla: RapidAPI (datum när titlar lades upp) eller bara TMDB.",
+      "Apple TV, SkyShowtime, Viaplay och Disney+ tillagda."
+    ]
+  },
+  {
+    "date": "2026-11-13",
+    "title": "Första versionen",
+    "changes": [
+      "Visar nya filmer och serier på Netflix, Prime Video och HBO Max i Sverige.",
+      "Datum för när titlar lades upp och direktlänkar till tjänsten."
+    ]
+  }
 ]

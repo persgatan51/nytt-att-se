@@ -121,6 +121,7 @@
     <button id="btnWant">⭐ Vill se</button>
     <button id="btnTips">💡 Tips</button>
     <button id="btnTop">🏆 Topplistor</button>
+    <button id="btnUpcoming">📅 Kommande</button>
     <button id="btnSoon">⏳ Försvinner</button>
     <button id="btnHidden">Visa dolda</button>
   </div>
@@ -180,6 +181,22 @@
   <div id="topStatus" class="msg"></div>
   <div id="topResults" class="grid"></div>
   <p class="tip" id="topNote" style="text-align:center"></p>
+</div>
+
+<div id="upView" class="overlay">
+  <div class="row searchbar">
+    <h1 style="font-size:18px">📅 Kommande</h1>
+    <button data-close>Stäng</button>
+  </div>
+  <div class="wrapchips" id="upSvc"></div>
+  <div class="wrapchips" id="upType">
+    <button data-uptype="all">Alla</button>
+    <button data-uptype="movie">Filmer</button>
+    <button data-uptype="series">Serier</button>
+  </div>
+  <div id="upStatus" class="msg"></div>
+  <div id="upResults"></div>
+  <p class="tip" id="upNote" style="text-align:center"></p>
 </div>
 
 <div id="soonView" class="overlay">
@@ -1282,6 +1299,101 @@ async function loadSoon(){
   }catch(e){ if (seq === soonSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
 $("btnSoon").onclick = openSoon;
+
+// ---------- Kommande (Streaming Availability, change_type=upcoming) ----------
+// Nya titlar och nya säsonger som tjänsterna aviserat. Hämtas för alla dina tjänster på en gång
+// (2 anrop, sparas 12 timmar) och filtreras sedan per tjänst i appen.
+const upKey = () => "upcoming|" + mySa().map(s=>s.key).join(",");
+const upCfg = Object.assign({ svc:"all", type:"all" }, store.get("up", {}));
+async function upcomingList(){
+  const c = store.get(upKey(), null);
+  if (c && Date.now() - c.t < 12*36e5) return c;
+  const items = [];
+  for (const itemType of ["show", "season"]){
+    const r = await sa("/changes", { country:COUNTRY, catalogs:mySa().map(s=>s.key+".subscription").join(","),
+      change_type:"upcoming", item_type:itemType, order_direction:"asc" });
+    for (const ch of r.changes || []){
+      const show = r.shows?.[ch.showId]; if (!show) continue;
+      items.push({ svc:ch.service?.id, ts:ch.timestamp || null, season:ch.season || null, link:ch.link || null, show:slim(show) });
+    }
+  }
+  showUsage();
+  const res = { t:Date.now(), items };
+  store.set(upKey(), res);
+  return res;
+}
+function comeLabel(ts){
+  if (!isFinite(ts)) return "Datum inte klart";
+  const d = new Date(ts*1000); d.setHours(0,0,0,0);
+  const t = new Date(); t.setHours(0,0,0,0);
+  const diff = Math.round((d-t)/864e5);
+  if (diff <= 0) return "Idag";
+  if (diff === 1) return "I morgon";
+  return d.toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" }).replace(/^./, c => c.toUpperCase());
+}
+let upSeq = 0;
+function openUpcoming(){
+  $("upView").classList.add("open");
+  if (upCfg.svc !== "all" && !mySa().some(s => s.key === upCfg.svc)) upCfg.svc = "all";
+  drawUpChips(); loadUpcoming();
+}
+function drawUpChips(){
+  $("upSvc").innerHTML = [`<button data-usvc="all" class="${upCfg.svc==="all"?"on":""}">Alla tjänster</button>`,
+    ...mySa().map(s => `<button data-usvc="${s.key}" class="${s.key===upCfg.svc?"on":""}">${esc(s.label)}</button>`)].join("");
+  $("upSvc").querySelectorAll("[data-usvc]").forEach(b => b.onclick = () => {
+    upCfg.svc = b.dataset.usvc; store.set("up", upCfg); drawUpChips(); redraws.upView && redraws.upView(); });
+  document.querySelectorAll("#upType [data-uptype]").forEach(b => b.classList.toggle("on", b.dataset.uptype === upCfg.type));
+}
+async function loadUpcoming(){
+  const seq = ++upSeq, st = $("upStatus"), out = $("upResults");
+  out.innerHTML = ""; $("upNote").textContent = "";
+  if (!cfg.saKey || !mySa().length){
+    st.textContent = "Kommande kräver en Streaming Availability-nyckel under ⚙︎ (gäller Netflix, Prime Video, HBO Max, Apple TV, Disney+ och SkyShowtime).";
+    st.style.display = ""; return;
+  }
+  st.textContent = "Hämtar…"; st.style.display = "";
+  try{
+    const r = await upcomingList();
+    if (seq !== upSeq) return;
+    const old = Date.now()/1000 - 86400;
+    const draw = () => {
+      if (seq !== upSeq) return;
+      out.innerHTML = "";
+      // En rad per titel + säsong; samma titel på flera tjänster slås ihop.
+      const byId = new Map();
+      for (const x of r.items){
+        if ((x.ts && x.ts < old) || !cfg.services.includes(x.svc)) continue;
+        if (upCfg.svc !== "all" && x.svc !== upCfg.svc) continue;
+        if (upCfg.type !== "all" && x.show.showType !== upCfg.type) continue;
+        const id = x.show.tmdbId + "|" + (x.season || "");
+        let it = byId.get(id);
+        if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, ts:x.ts, season:x.season }; byId.set(id, it); }
+        it.added[x.svc] = 0; if (x.link) it.links[x.svc] = x.link;
+        if (x.ts && (!it.ts || x.ts < it.ts)) it.ts = x.ts;
+      }
+      const list = [...byId.values()].filter(it => markOf("tmdb:"+it.show.tmdbId, it) !== "hidden")
+        .sort((a,b) => (a.ts || Infinity) - (b.ts || Infinity));
+      const groups = new Map();
+      for (const it of list){ const l = comeLabel(it.ts || Infinity); if (!groups.has(l)) groups.set(l, []); groups.get(l).push(it); }
+      for (const [lbl, items] of groups){
+        const h = document.createElement("h3"); h.textContent = lbl; out.appendChild(h);
+        const g = document.createElement("div"); g.className = "grid"; out.appendChild(g);
+        for (const it of items){
+          const c = card("tmdb:"+it.show.tmdbId, it);
+          if (it.season) c.querySelector(".t").insertAdjacentHTML("afterend", `<div class="m" style="color:var(--acc)">Säsong ${it.season}</div>`);
+          g.appendChild(c);
+        }
+      }
+      st.style.display = list.length ? "none" : "";
+      if (!list.length) st.textContent = upCfg.svc === "all" ? "Inget aviserat på dina tjänster just nu." : `Inget aviserat på ${svcLabel(upCfg.svc)} just nu.`;
+    };
+    draw(); redraws.upView = draw;
+    $("upNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Tryck ⭐ Vill se på något som kommer, så säger bevakningen till när det finns att se.`;
+  }catch(e){ if (seq === upSeq){ st.textContent = e.message; st.style.display = ""; } }
+}
+$("btnUpcoming").onclick = openUpcoming;
+document.querySelectorAll("#upType [data-uptype]").forEach(b => b.onclick = () => {
+  upCfg.type = b.dataset.uptype; store.set("up", upCfg); drawUpChips(); redraws.upView && redraws.upView(); });
 
 // ---------- Bevakning: Vill se dyker upp, ny säsong, försvinner snart ----------
 let alerts = store.get("alerts", []);   // { id, key, kind, text, t, item, done }
