@@ -95,6 +95,14 @@
   .alert button{padding:4px 10px;flex:none}
   #ratings a{color:var(--fg);text-decoration:none}
   .leave{color:#ffb4a2}
+  #btnSettings{position:relative}
+  #btnSettings.dot::after{content:"";position:absolute;top:3px;right:3px;width:9px;height:9px;border-radius:50%;background:var(--acc)}
+  .cl{border-top:1px solid var(--line);padding:12px 0}
+  .cl:first-of-type{border-top:0}
+  .cl b{display:block;font-size:15px}
+  .cl ul{margin:6px 0 0;padding-left:20px}
+  .cl li{margin:4px 0}
+  .cl .new{background:var(--acc);color:#111;border-radius:6px;padding:0 6px;font-size:11px;font-weight:700;margin-left:6px}
 </style>
 </head>
 <body>
@@ -186,6 +194,8 @@
 
 <div class="sheet" id="quick"><div class="panel"><div class="pad" id="quickBody"></div></div></div>
 
+<div class="sheet" id="changelog"><div class="panel"><div class="pad" id="changelogBody"></div></div></div>
+
 <div class="sheet" id="detail"><div class="panel" id="detailBody"></div></div>
 
 <div class="sheet" id="settings"><div class="panel"><div class="pad">
@@ -225,6 +235,7 @@
   <p class="tip">Originalspråket kommer från TMDB (kräver TMDB-nyckeln). Gäller listan, inte sökningen.</p>
   <div class="actions">
     <a href="#" class="primary" id="saveSettings">Spara</a>
+    <a href="#" id="openChangelog">📜 Vad är nytt</a>
     <a href="#" id="closeSettings">Stäng</a>
   </div>
 </div></div></div>
@@ -1501,6 +1512,42 @@ async function syncNow(){
   }catch(e){ setSyncStatus("Synken misslyckades: " + e.message); }
   finally{ syncBusy = false; }
 }
+
+// ---------- Ändringslogg (changelog.json) ----------
+async function fetchChangelog(){
+  const r = await fetch("changelog.json?v=" + Date.now(), { cache:"no-store" });
+  if (!r.ok) throw new Error("Kunde inte hämta ändringsloggen ("+r.status+").");
+  return r.json();
+}
+const clId = e => e.date + "|" + e.title;
+async function openChangelog(){
+  closeSheets();
+  $("changelogBody").innerHTML = `<h2>📜 Vad är nytt</h2><p class="m">Hämtar…</p>`;
+  $("changelog").classList.add("open");
+  try{
+    const list = await fetchChangelog();
+    const seen = store.get("clSeen", null);
+    const seenIdx = seen ? list.findIndex(e => clId(e) === seen) : -1;
+    $("changelogBody").innerHTML = `<h2>📜 Vad är nytt</h2>` + list.map((e, i) => `
+      <div class="cl"><b>${esc(e.title)}${seen && (seenIdx < 0 || i < seenIdx) ? `<span class="new">NYTT</span>` : ""}</b>
+        <span class="m">${new Date(e.date).toLocaleDateString("sv-SE",{ day:"numeric", month:"long", year:"numeric" })}</span>
+        <ul>${(e.changes || []).map(c => `<li>${esc(c)}</li>`).join("")}</ul></div>`).join("") +
+      `<div class="actions"><a href="#" id="closeChangelog">Stäng</a></div>`;
+    if (list.length) store.set("clSeen", clId(list[0]));
+    $("btnSettings").classList.remove("dot");
+  }catch(e){
+    $("changelogBody").innerHTML = `<h2>📜 Vad är nytt</h2><p class="m">${esc(e.message)}</p><div class="actions"><a href="#" id="closeChangelog">Stäng</a></div>`;
+  }
+  $("closeChangelog").onclick = ev => { ev.preventDefault(); closeSheets(); };
+}
+$("openChangelog").onclick = e => { e.preventDefault(); openChangelog(); };
+// Prick på ⚙︎ när det finns ändringar du inte sett. Första gången räknas allt som sett.
+fetchChangelog().then(list => {
+  if (!list.length) return;
+  const seen = store.get("clSeen", null);
+  if (!seen) store.set("clSeen", clId(list[0]));
+  else if (seen !== clId(list[0])) $("btnSettings").classList.add("dot");
+}).catch(() => {});
 
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
 document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));

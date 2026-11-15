@@ -2,7 +2,13 @@
 Kör: python3 tests/smoke_test.py [sökväg till chrome]
 Kräver: pip install playwright (använder installerad Chrome/Chromium)."""
 import json, re, sys, pathlib, shutil, time
-INDEX = (pathlib.Path(__file__).resolve().parent.parent / "index.html").as_uri()
+import http.server, threading, functools
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+class _Quiet(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *a): pass
+_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(ROOT)))
+threading.Thread(target=_srv.serve_forever, daemon=True).start()
+INDEX = f"http://127.0.0.1:{_srv.server_address[1]}/index.html"
 CHROME = sys.argv[1] if len(sys.argv) > 1 else (shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser"))
 
 def mk(i):
@@ -67,7 +73,7 @@ def check(cond, msg):
     if not cond: errs.append(msg)
 
 with sync_playwright() if False else __import__("playwright.sync_api", fromlist=["sync_playwright"]).sync_playwright() as p:
-    b = p.chromium.launch(executable_path=CHROME, args=["--no-sandbox"])
+    b = p.chromium.launch(executable_path=CHROME, args=["--no-sandbox", "--no-proxy-server"])
     ctx = b.new_context(viewport={"width":400,"height":850})
     ctx.route(re.compile(r"https://(api|image)\.themoviedb\.org/.*"), tmdb)
     ctx.route(re.compile(r"https://streaming-availability\.p\.rapidapi\.com/.*"), sa)
@@ -113,6 +119,8 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("closeSearch()")
     pg.evaluate("setMark('tmdb:movie/700', {show:{tmdbId:'movie/700'}}, 'want')"); pg.wait_for_timeout(5500)
     check('"movie/700":{"status":null' in (gist["content"] or ""), "ångrad markering synkas")
+    pg.evaluate("closeSheets()"); pg.click("#btnSettings"); pg.click("#openChangelog"); pg.wait_for_timeout(500)
+    check(pg.locator("#changelogBody .cl").count() > 0, f"ändringsloggen visar {pg.locator('#changelogBody .cl').count()} poster")
     b.close()
 
 print("JS-fel:" , [e for e in errs if e.startswith("JS")])
