@@ -323,6 +323,47 @@ const store = {
   get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{ return d; } },
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 };
+// Större listor (topplistor, kommande, försvinner) sparas i IndexedDB, som rymmer mycket mer än localStorage.
+// Varje lista hämtas en gång per dygn; misslyckas en hämtning visas den senast sparade.
+const bigCache = (() => {
+  const mem = new Map();
+  let dbp = null;
+  const db = () => dbp || (dbp = new Promise((ok, fail) => {
+    const r = indexedDB.open("nytt-att-se", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("cache");
+    r.onsuccess = () => ok(r.result); r.onerror = () => fail(r.error);
+  }));
+  const tx = async (mode, fn) => { const d = await db(); return new Promise((ok, fail) => {
+    const t = d.transaction("cache", mode), req = fn(t.objectStore("cache"));
+    t.oncomplete = () => ok(req?.result); t.onerror = () => fail(t.error); }); };
+  return {
+    async get(k){
+      if (mem.has(k)) return mem.get(k);
+      try{ const v = await tx("readonly", st => st.get(k)); if (v !== undefined) mem.set(k, v); return v ?? null; }
+      catch{ return null; }
+    },
+    peek: k => mem.get(k) ?? null,                  // synkron läsning av det som redan laddats
+    async set(k, v){ mem.set(k, v); try{ await tx("readwrite", st => st.put(v, k)); }catch(e){ console.warn("Cache:", e); } },
+  };
+})();
+const dayKey = () => new Date().toLocaleDateString("sv-SE");
+const freshToday = c => c && c.day === dayKey();
+// Hämtar en dagslista: sparad från idag används direkt, annars hämtas ny (och vid fel visas den gamla).
+async function daily(key, fetcher, force=false){
+  const c = await bigCache.get(key);
+  if (!force && freshToday(c)) return c;
+  try{
+    const res = { ...(await fetcher()), t:Date.now(), day:dayKey() };
+    await bigCache.set(key, res);
+    return res;
+  }catch(e){
+    if (c) return { ...c, stale:true };
+    throw e;
+  }
+}
+// Rensa gamla listor ur localStorage (flyttade till IndexedDB).
+try{ Object.keys(localStorage).filter(k => /^(top\d?\||upcoming\d?\||expiring\|)/.test(k)).forEach(k => localStorage.removeItem(k)); }catch{}
+
 const oldCfg = store.get("cfg",{});
 let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "", omdbKey:"", ghToken:"",
                           langs:["en","sv","da","no","es","fr"], langOn:true,
@@ -1155,9 +1196,10 @@ function drawTopChips(){
   $("topType").style.display = "none";
   document.querySelectorAll("#topType [data-toptype]").forEach(b => b.classList.toggle("on", b.dataset.toptype === topType()));
 }
-async function topList(svc, type){
-  const key = `top3|${svc}|${type}`, c = store.get(key, null);
-  if (c && Date.now() - c.t < 12*36e5) return c;
+async function topList(svc, type, force=false){
+  return daily(`top|${svc}|${type}|${cfg.saKey ? "sa" : ""}`, () => fetchTop(svc, type), force);
+}
+async function fetchTop(svc, type){
   let res = null;
   if (cfg.saKey && SA_TOP.includes(svc)){
     try{
@@ -1189,16 +1231,21 @@ async function topList(svc, type){
       return it; });
     res = { t:Date.now(), src:"tmdb", items };
   }
-  store.set(key, res);
   return res;
 }
-async function loadTop(){
+// Fotnot med när listan hämtades och en länk för att hämta om den direkt.
+function setNote(id, r, text, refresh){
+  const when = new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+  $(id).innerHTML = `${esc(text)}<br>${r.stale ? "Kunde inte hämta ny lista – visar den från" : "Hämtad"} ${esc(when)}, uppdateras en gång per dygn. <a href="#" data-refresh>↻ Hämta nu</a>`;
+  $(id).querySelector("[data-refresh]").onclick = e => { e.preventDefault(); refresh(); };
+}
+async function loadTop(force=false){
   const seq = ++topSeq, st = $("topStatus"), out = $("topResults");
   out.innerHTML = ""; $("topNote").textContent = "";
   if (!topCfg.svc){ st.textContent = "Välj streamingtjänster under ⚙︎."; st.style.display = ""; return; }
   st.textContent = "Hämtar topplista…"; st.style.display = "";
   try{
-    const r = await topList(topCfg.svc, topType());
+    const r = await topList(topCfg.svc, topType(), force);
     if (seq !== topSeq) return;
     const items = r.items.map(freshItem);
     items.forEach(it => { if (!Object.keys(it.added).length) it.added[topCfg.svc] = 0; });
@@ -1214,10 +1261,9 @@ async function loadTop(){
       if (!items.length) st.textContent = "Ingen topplista just nu.";
     };
     draw(); redraws.topView = draw;
-    const when = new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
-    $("topNote").textContent = r.src === "sa"
-      ? `${svcLabel(topCfg.svc)}s egen topplista i Sverige (hämtad ${when}).`
-      : `Det populäraste på ${svcLabel(topCfg.svc)} just nu enligt TMDB${SA_TOP.includes(topCfg.svc) && !cfg.saKey ? " – med en Streaming Availability-nyckel visas tjänstens egen topp 10" : ""}.`;
+    setNote("topNote", r, r.src === "sa"
+      ? `${svcLabel(topCfg.svc)}s egen topplista i Sverige.`
+      : `Det populäraste på ${svcLabel(topCfg.svc)} just nu enligt TMDB${SA_TOP.includes(topCfg.svc) && !cfg.saKey ? " – med en Streaming Availability-nyckel visas tjänstens egen topp 10" : ""}.`, () => loadTop(true));
   }catch(e){ if (seq === topSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
 document.querySelectorAll("#topType [data-toptype]").forEach(b => b.onclick = () => {
@@ -1226,9 +1272,10 @@ document.querySelectorAll("#topType [data-toptype]").forEach(b => b.onclick = ()
 // ---------- Försvinner snart (Streaming Availability, change_type=expiring) ----------
 const expKey = () => "expiring|" + mySa().map(s=>s.key).join(",");
 async function expiringList(force=false){
-  const c = store.get(expKey(), null);
-  if (!force && c && Date.now() - c.t < 12*36e5) return c;
-  if (!cfg.saKey || !mySa().length) return c;
+  if (!cfg.saKey || !mySa().length) return bigCache.get(expKey());
+  return daily(expKey(), fetchExpiring, force);
+}
+async function fetchExpiring(){
   const items = []; let cursor;
   for (let i = 0; i < 2; i++){
     const r = await sa("/changes", { country:COUNTRY, catalogs:mySa().map(s=>s.key+".subscription").join(","),
@@ -1241,14 +1288,12 @@ async function expiringList(force=false){
     cursor = r.nextCursor;
   }
   showUsage();
-  const res = { t:Date.now(), items };
-  store.set(expKey(), res);
-  return res;
+  return { items };
 }
 function leavingFor(tmdbId){
   if (!tmdbId) return [];
   const now = Date.now()/1000 - 86400;
-  return (store.get(expKey(), null)?.items || [])
+  return (bigCache.peek(expKey())?.items || [])
     .filter(x => x.show.tmdbId === tmdbId && cfg.services.includes(x.svc) && (!x.ts || x.ts > now));
 }
 function leaveLabel(ts){
@@ -1262,7 +1307,7 @@ function leaveLabel(ts){
 }
 let soonSeq = 0;
 function openSoon(){ loadSoon(); }
-async function loadSoon(){
+async function loadSoon(force=false){
   const seq = ++soonSeq, st = $("soonStatus"), out = $("soonResults");
   out.innerHTML = ""; $("soonNote").textContent = "";
   if (!cfg.saKey || !mySa().length){
@@ -1271,7 +1316,7 @@ async function loadSoon(){
   }
   st.textContent = "Hämtar…"; st.style.display = "";
   try{
-    const r = await expiringList();
+    const r = await expiringList(force);
     if (seq !== soonSeq) return;
     const byId = new Map(), old = Date.now()/1000 - 86400;
     for (const x of r?.items || []){
@@ -1310,7 +1355,7 @@ async function loadSoon(){
       if (!list.length) st.textContent = "Inget som försvinner från dina tjänster just nu.";
     };
     draw(); redraws.soonView = draw;
-    $("soonNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Tjänsterna meddelar inte alltid i förväg, så listan är inte komplett.`;
+    setNote("soonNote", r, "Tjänsterna meddelar inte alltid i förväg, så listan är inte komplett.", () => loadSoon(true));
   }catch(e){ if (seq === soonSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
 
@@ -1390,9 +1435,10 @@ async function tmdbUpcoming(svc){
   }
   return items;
 }
-async function upcomingList(){
-  const c = store.get(upKey(), null);
-  if (c && Date.now() - c.t < 12*36e5) return c;
+async function upcomingList(force=false){
+  return daily(upKey(), fetchUpcoming, force);
+}
+async function fetchUpcoming(){
   const items = [];
   if (cfg.saKey && mySa().length){
     for (const itemType of ["show", "season"]){
@@ -1414,9 +1460,7 @@ async function upcomingList(){
     const have = new Set(items.map(x => x.show.tmdbId + "|" + (x.season || "") + "|" + x.svc));
     for (const x of res.flat()) if (!have.has(x.show.tmdbId + "|" + (x.season || "") + "|" + x.svc)) items.push(x);
   }
-  const res = { t:Date.now(), items };
-  store.set(upKey(), res);
-  return res;
+  return { items };
 }
 function comeLabel(ts){
   if (!isFinite(ts)) return "Datum inte klart";
@@ -1429,7 +1473,7 @@ function comeLabel(ts){
 }
 let upSeq = 0;
 function openUpcoming(){ loadUpcoming(); }
-async function loadUpcoming(){
+async function loadUpcoming(force=false){
   const seq = ++upSeq, st = $("upStatus"), out = $("upResults");
   out.innerHTML = ""; $("upNote").textContent = "";
   if (!mine().some(canUpcoming)){
@@ -1438,7 +1482,7 @@ async function loadUpcoming(){
   }
   st.textContent = "Hämtar kommande… (första gången kan det ta några sekunder)"; st.style.display = "";
   try{
-    const r = await upcomingList();
+    const r = await upcomingList(force);
     if (seq !== upSeq) return;
     const old = Date.now()/1000 - 86400;
     const draw = () => {
@@ -1477,7 +1521,7 @@ async function loadUpcoming(){
       if (!list.length) st.textContent = disc.svc === "all" ? "Inget aviserat på dina tjänster just nu." : `Inget aviserat på ${svcLabel(disc.svc)} just nu.`;
     };
     draw(); redraws.upView = draw;
-    $("upNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Datum från tjänsterna (Streaming Availability) när de finns, annars aviserade premiärer från TMDB – mest tjänsternas egna serier och filmer. Tryck ⭐ Vill se på något som kommer, så säger bevakningen till när det finns att se.`;
+    setNote("upNote", r, `Datum från tjänsterna (Streaming Availability) när de finns, annars aviserade premiärer från TMDB – mest tjänsternas egna serier och filmer. Tryck ⭐ Vill se på något som kommer, så säger bevakningen till när det finns att se.`, () => loadUpcoming(true));
   }catch(e){ if (seq === upSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
 
@@ -1905,6 +1949,7 @@ $("watchNowBtn").onclick = async e => { e.preventDefault(); toast("Kollar bevakn
   try{ TV && typeof TV.checkWatchNow === "function" && TV.checkWatchNow(); }catch{}
   if (!alerts.some(a => !a.done)) toast("Inget nytt i bevakningen just nu."); };
 
+bigCache.get(expKey());
 load();
 setTimeout(async () => { if (cfg.ghToken) await syncNow(); runWatch(); }, 1200);
 document.addEventListener("visibilitychange", () => {

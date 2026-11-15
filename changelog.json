@@ -1,6 +1,15 @@
 [
   {
     "date": "2026-11-15",
+    "title": "Snabbare Upptäck",
+    "changes": [
+      "Topplistor, Kommande och Försvinner hämtas en gång per dygn och sparas, så de visas direkt nästa gång.",
+      "Längst ner i varje lista står när den hämtades, med en länk för att hämta om den direkt.",
+      "Går det inte att hämta en ny lista visas den senast sparade."
+    ]
+  },
+  {
+    "date": "2026-11-15",
     "title": "Nytt gränssnitt",
     "changes": [
       "Flikrad längst ner: Nytt, Upptäck, Mina listor och Sök.",

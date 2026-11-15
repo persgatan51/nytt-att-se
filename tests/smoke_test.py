@@ -139,6 +139,15 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check(0 < pg.locator("#upResults .item").count() < n, "kommande: filter på serier")
     pg.click("#typeChips [data-type='all']")
 
+    # Dagslistor sparas: ny sidladdning ska inte hämta topplista/kommande igen.
+    before = sum(1 for c in calls if "/shows/top" in c or "change_type=upcoming" in c)
+    pg.reload(); pg.wait_for_timeout(1500)
+    pg.click("[data-tab='disc']"); pg.click("#discTabs [data-disc='top']"); pg.wait_for_timeout(600)
+    pg.click("#discTabs [data-disc='up']"); pg.wait_for_timeout(600)
+    after = sum(1 for c in calls if "/shows/top" in c or "change_type=upcoming" in c)
+    check(after == before and pg.locator("#upResults .item").count() > 0, f"dagslistor hämtas inte igen ({before} → {after} anrop)")
+    check("Hämtad" in pg.locator("#upNote").inner_text(), "fotnot visar när listan hämtades")
+
     pg.click("[data-tab='lists']"); pg.wait_for_timeout(200)
     check(pg.locator("#listGrid .item").count() == 1, "Mina listor: Vill se")
     pg.click("#listTabs [data-list='seen']")
