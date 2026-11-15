@@ -84,6 +84,17 @@
             padding:env(safe-area-inset-top) 14px calc(30px + env(safe-area-inset-bottom))}
   #tipsView.open{display:block}
   .wrapchips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .overlay{position:fixed;inset:0;background:var(--bg);z-index:15;display:none;overflow:auto;
+           padding:env(safe-area-inset-top) 14px calc(30px + env(safe-area-inset-bottom))}
+  .overlay.open{display:block}
+  .overlay h3,#alerts h3,#forYou h3{text-transform:none}
+  .rank{position:absolute;left:6px;top:6px;background:var(--acc);color:#111;font-weight:800;border-radius:8px;padding:1px 8px;font-size:14px}
+  .alert{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px;margin-bottom:8px;cursor:pointer}
+  .alert img{width:40px;height:60px;object-fit:cover;border-radius:6px;flex:none}
+  .atxt{flex:1;font-size:14px}
+  .alert button{padding:4px 10px;flex:none}
+  #ratings a{color:var(--fg);text-decoration:none}
+  .leave{color:#ffb4a2}
 </style>
 </head>
 <body>
@@ -101,11 +112,15 @@
     <button id="btnYear"></button>
     <button id="btnWant">⭐ Vill se</button>
     <button id="btnTips">💡 Tips</button>
+    <button id="btnTop">🏆 Topplistor</button>
+    <button id="btnSoon">⏳ Försvinner</button>
     <button id="btnHidden">Visa dolda</button>
   </div>
 </header>
 
 <main>
+  <div id="alerts"></div>
+  <div id="forYou"></div>
   <div id="status" class="msg">Laddar…</div>
   <div id="list"></div>
   <button id="btnMore" class="more" style="display:none">Visa äldre</button>
@@ -113,7 +128,7 @@
   <p class="tip" id="usage" style="text-align:center"></p>
 </main>
 
-<div id="searchView">
+<div id="searchView" class="overlay">
   <div class="row searchbar">
     <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Sök film, serie eller skådespelare">
     <button id="closeSearch">Stäng</button>
@@ -122,7 +137,7 @@
   <div id="searchResults"></div>
 </div>
 
-<div id="tipsView">
+<div id="tipsView" class="overlay">
   <div class="row searchbar">
     <h1 style="font-size:18px">💡 Tips efter genre</h1>
     <button id="closeTips">Stäng</button>
@@ -142,6 +157,31 @@
   <div id="tipsResults" class="grid"></div>
   <button id="tipsMore" class="more" style="display:none">Visa fler</button>
   <p class="tip" id="tipsNote" style="text-align:center"></p>
+</div>
+
+<div id="topView" class="overlay">
+  <div class="row searchbar">
+    <h1 style="font-size:18px">🏆 Topplistor</h1>
+    <button data-close>Stäng</button>
+  </div>
+  <div class="wrapchips" id="topSvc"></div>
+  <div class="wrapchips" id="topType">
+    <button data-toptype="movie">Filmer</button>
+    <button data-toptype="series">Serier</button>
+  </div>
+  <div id="topStatus" class="msg"></div>
+  <div id="topResults" class="grid"></div>
+  <p class="tip" id="topNote" style="text-align:center"></p>
+</div>
+
+<div id="soonView" class="overlay">
+  <div class="row searchbar">
+    <h1 style="font-size:18px">⏳ Försvinner snart</h1>
+    <button data-close>Stäng</button>
+  </div>
+  <div id="soonStatus" class="msg"></div>
+  <div id="soonResults"></div>
+  <p class="tip" id="soonNote" style="text-align:center"></p>
 </div>
 
 <div class="sheet" id="quick"><div class="panel"><div class="pad" id="quickBody"></div></div></div>
@@ -166,6 +206,15 @@
   <p class="tip">Gratisnivån räcker gott för privat bruk. Appen sparar svaren i några timmar för att spara anrop.</p>
   <label for="tmdbKey">TMDB-nyckel (krävs för "Bara TMDB", Viaplay, landfilter och svenska beskrivningar)</label>
   <input id="tmdbKey" autocomplete="off" spellcheck="false" placeholder="v3-nyckel eller Read Access Token">
+  <label for="omdbKey">OMDb-nyckel (valfri – visar betyg från IMDb, Rotten Tomatoes och Metacritic)</label>
+  <input id="omdbKey" autocomplete="off" spellcheck="false" placeholder="Gratis på omdbapi.com/apikey.aspx">
+  <label for="ghToken">GitHub-token för synk mellan enheter (valfri – behörighet: gist)</label>
+  <input id="ghToken" autocomplete="off" spellcheck="false" placeholder="github_pat_… eller ghp_…">
+  <p class="tip" id="syncStatus">Vill se, Sett och Ta bort sparas i en privat gist på ditt GitHub-konto, så att alla enheter med samma token ser samma listor.</p>
+  <div class="actions" style="margin-top:6px">
+    <a href="#" id="syncNowBtn">🔄 Synka nu</a>
+    <a href="#" id="watchNowBtn">🔔 Kolla bevakningen nu</a>
+  </div>
   <p class="tip">Nycklarna sparas bara i den här webbläsaren.</p>
   <label>Mina streamingtjänster</label>
   <div id="serviceBoxes"></div>
@@ -215,7 +264,7 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 };
 const oldCfg = store.get("cfg",{});
-let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "",
+let cfg = Object.assign({ saKey:"", saSource:"rapid", tmdbKey: oldCfg.key || "", omdbKey:"", ghToken:"",
                           langs:["en","sv","da","no","es","fr"], langOn:true,
                           minYear:2025, yearOn:true, source:"rapid",
                           services:SERVICES.map(s=>s.key) }, store.get("cfg2",{}));
@@ -241,10 +290,12 @@ function snapshot(it){
 }
 function setMark(id, it, status){
   const key = markKey(id, it);
-  delete marks[id];
-  if (!status || marks[key]?.status === status) delete marks[key];       // tryck igen = ångra
+  if (id !== key) delete marks[id];
+  // Ångrad markering sparas som { status:null } så att borttagningen också synkas till andra enheter.
+  if (!status || marks[key]?.status === status) marks[key] = { status:null, t:Date.now() };       // tryck igen = ångra
   else marks[key] = { status, t:Date.now(), item:snapshot(it) };
   store.set("marks", marks);
+  queueSync(); exportWatch();
 }
 let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
 let state = { type:"all", svc:new Set(cfg.services), showHidden:false,
@@ -473,7 +524,7 @@ function dayLabel(ts){
 // ---------- UI ----------
 function render(){
   const listEl = document.getElementById("list"), status = document.getElementById("status");
-  updateWantChip();
+  updateWantChip(); renderAlerts(); renderForYou();
   if (state.view === "want") return renderWant(listEl, status);
   let filteredOut = 0;
   const items = [...state.shows.entries()].filter(([id,it]) => {
@@ -601,7 +652,7 @@ async function loadExtras(s){
   if (!cfg.tmdbKey || !s.tmdbId) return null;
   if (extrasCache[s.tmdbId]) return extrasCache[s.tmdbId];
   try{
-    const j = await tmdbGet("/"+s.tmdbId, { language:"sv-SE", append_to_response:"credits,videos,recommendations,similar",
+    const j = await tmdbGet("/"+s.tmdbId, { language:"sv-SE", append_to_response:"credits,videos,recommendations,similar,external_ids",
                                            include_video_language:"sv,en,null" });
     const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ name:c.name, role:c.character }));
     const makers = s.tmdbId.startsWith("movie/")
@@ -613,7 +664,7 @@ async function loadExtras(s){
     const type = s.tmdbId.startsWith("movie/") ? "movie" : "tv";
     const recs = (j.recommendations?.results?.length ? j.recommendations.results : j.similar?.results || [])
       .filter(x => x.poster_path).slice(0, 20).map(x => searchItem(x, type));
-    const ex = { sv:j.overview || null, cast, makers, recs,
+    const ex = { sv:j.overview || null, cast, makers, recs, imdb: j.imdb_id || j.external_ids?.imdb_id || null,
                  trailer: best && (best.type==="Trailer" || best.type==="Teaser") ? "https://www.youtube.com/watch?v="+best.key : null };
     extrasCache[s.tmdbId] = ex;
     return ex;
@@ -635,6 +686,8 @@ function openDetail(id,it){
       <div class="m">${it.search
         ? (Object.keys(it.added).length ? "Finns på "+esc(Object.keys(it.added).map(svcLabel).join(", ")) : "Finns inte på dina tjänster")
         : "Ny på "+esc(addedTxt)}</div>
+      ${leavingFor(s.tmdbId).map(x=>`<div class="m leave">⏳ Försvinner från ${esc(svcLabel(x.svc))} ${x.ts ? new Date(x.ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"long"}) : "snart"}</div>`).join("")}
+      <div id="ratings" class="m"></div>
       <p id="overview">${esc((meta[s.tmdbId]?.sv) || s.overview || "")}</p>
       <div id="people" class="m">${s.cast?.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
       <div class="actions">
@@ -676,6 +729,7 @@ function openDetail(id,it){
     if (ppl.length) $("people").innerHTML = ppl.join("");
     if (ex.trailer) $("trailerSlot").innerHTML = `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
     renderSimilar(s, ex.recs || []);
+    renderRatings(s, ex.imdb || s.imdbId);
   });
 }
 
@@ -711,7 +765,9 @@ async function fillServices(items){
 function redrawOverlays(){
   if ($("searchView").classList.contains("open") && redrawSearch) redrawSearch();
   if ($("tipsView").classList.contains("open") && redrawTips) redrawTips();
+  for (const [id, f] of Object.entries(redraws)) if ($(id).classList.contains("open")) f();
 }
+const redraws = {};
 
 // ---------- Google TV (bara i Android-appen, via window.TvBridge) ----------
 const TV = window.TvBridge || null;
@@ -719,8 +775,8 @@ const tvCbs = {};
 window.__tvCb = (id, ok, data) => { const f = tvCbs[id]; delete tvCbs[id]; f && f(ok, data); };
 window.__tvBack = () => {
   if (document.querySelector(".sheet.open")){ closeSheets(); return true; }
-  if ($("tipsView").classList.contains("open")){ closeTips(); return true; }
-  if ($("searchView").classList.contains("open")){ closeSearch(); return true; }
+  const ov = [...document.querySelectorAll(".overlay.open")].pop();
+  if (ov){ ov.id === "searchView" ? closeSearch() : ov.classList.remove("open"); return true; }
   return false;
 };
 function tvCall(method, ...args){
@@ -1025,6 +1081,427 @@ $("tipsMore").onclick = () => {
   tipsPage++; loadTips(true);
 };
 
+// ---------- Hjälp för titlar från Streaming Availability ----------
+// Bantad kopia av en titel (sparas i localStorage, så bara det appen använder).
+function slim(s){
+  return { showType:s.showType, tmdbId:s.tmdbId, imdbId:s.imdbId, title:s.title, overview:s.overview,
+           releaseYear:s.releaseYear, firstAirYear:s.firstAirYear, rating:s.rating, runtime:s.runtime,
+           seasonCount:s.seasonCount, cast:(s.cast||[]).slice(0,6),
+           imageSet:{ verticalPoster:{ w360:poster(s) }, horizontalBackdrop:{ w720:backdrop(s) } } };
+}
+function saItem(show){
+  const it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:slim(show) };
+  for (const o of show.streamingOptions?.[COUNTRY] || []){
+    const k = o.service?.id;
+    if (!cfg.services.includes(k) || o.type==="rent" || o.type==="buy") continue;
+    it.added[k] = 0; it.links[k] = it.links[k] || o.videoLink || o.link;
+  }
+  return it;
+}
+const freshItem = it => JSON.parse(JSON.stringify(it));
+const shortDate = ts => new Date(ts*1000).toLocaleDateString("sv-SE",{ day:"numeric", month:"short" });
+
+// ---------- Topplistor per tjänst ----------
+// Netflix, Prime Video, Disney+, Apple TV och HBO Max: tjänstens egen topp 10 i Sverige (Streaming Availability).
+// Övriga tjänster, eller utan RapidAPI-nyckel: det populäraste på tjänsten just nu enligt TMDB.
+const SA_TOP = ["netflix","prime","disney","apple","hbo"];
+const topCfg = Object.assign({ svc:null, type:"movie" }, store.get("top", {}));
+let topSeq = 0;
+function openTop(){
+  $("topView").classList.add("open");
+  if (!topCfg.svc || !cfg.services.includes(topCfg.svc)) topCfg.svc = cfg.services[0] || null;
+  drawTopChips(); loadTop();
+}
+function drawTopChips(){
+  $("topSvc").innerHTML = mine().map(s=>`<button data-tsvc="${s.key}" class="${s.key===topCfg.svc?"on":""}">${esc(s.label)}</button>`).join("");
+  $("topSvc").querySelectorAll("[data-tsvc]").forEach(b => b.onclick = () => {
+    topCfg.svc = b.dataset.tsvc; store.set("top", topCfg); drawTopChips(); loadTop(); });
+  document.querySelectorAll("#topType [data-toptype]").forEach(b => b.classList.toggle("on", b.dataset.toptype === topCfg.type));
+}
+async function topList(svc, type){
+  const key = `top2|${svc}|${type}`, c = store.get(key, null);
+  if (c && Date.now() - c.t < 12*36e5) return c;
+  let res = null;
+  if (cfg.saKey && SA_TOP.includes(svc)){
+    try{
+      const r = await sa("/shows/top", { country:COUNTRY, service:svc, show_type:type });
+      const shows = Array.isArray(r) ? r : (r.shows || []);
+      if (shows.length) res = { t:Date.now(), src:"sa", items:shows.map(saItem) };
+    }catch(e){ console.warn("Topplista:", e); }
+    showUsage();
+  }
+  if (!res){
+    if (!cfg.tmdbKey) throw new Error("Topplistor kräver en Streaming Availability- eller TMDB-nyckel under ⚙︎.");
+    const t = type==="movie" ? "movie" : "tv", svcObj = SERVICES.find(s=>s.key===svc);
+    await myProviderIds(t);
+    const ids = provListCache[t].filter(p=>svcObj.match.test((p.provider_name||"").trim())).map(p=>p.provider_id);
+    if (!ids.length) throw new Error(`Hittade inte ${svcObj.label} hos TMDB.`);
+    const r = await tmdbGet(`/discover/${t}`, { watch_region:"SE", language:"sv-SE", include_adult:"false",
+      with_watch_providers:ids.join("|"), with_watch_monetization_types:"flatrate|free|ads",
+      sort_by:"popularity.desc", "vote_count.gte":10 });
+    const items = (r.results||[]).filter(x=>x.poster_path).slice(0,20).map(x=>{
+      const it = searchItem(x, t);
+      it.pending = false; it.added[svc] = 0; it.approx[svc] = true;
+      it.links[svc] = `https://www.themoviedb.org/${it.show.tmdbId}/watch?locale=SE`;
+      return it; });
+    res = { t:Date.now(), src:"tmdb", items };
+  }
+  store.set(key, res);
+  return res;
+}
+async function loadTop(){
+  const seq = ++topSeq, st = $("topStatus"), out = $("topResults");
+  out.innerHTML = ""; $("topNote").textContent = "";
+  if (!topCfg.svc){ st.textContent = "Välj streamingtjänster under ⚙︎."; st.style.display = ""; return; }
+  st.textContent = "Hämtar topplista…"; st.style.display = "";
+  try{
+    const r = await topList(topCfg.svc, topCfg.type);
+    if (seq !== topSeq) return;
+    const items = r.items.map(freshItem);
+    items.forEach(it => { if (!Object.keys(it.added).length) it.added[topCfg.svc] = 0; });
+    const draw = () => {
+      if (seq !== topSeq) return;
+      out.innerHTML = "";
+      items.forEach((it, i) => {
+        const c = card("tmdb:"+it.show.tmdbId, it);
+        c.querySelector(".pwrap").insertAdjacentHTML("beforeend", `<span class="rank">${i+1}</span>`);
+        out.appendChild(c);
+      });
+      st.style.display = items.length ? "none" : "";
+      if (!items.length) st.textContent = "Ingen topplista just nu.";
+    };
+    draw(); redraws.topView = draw;
+    const when = new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+    $("topNote").textContent = r.src === "sa"
+      ? `${svcLabel(topCfg.svc)}s egen topplista i Sverige (hämtad ${when}).`
+      : `Det populäraste på ${svcLabel(topCfg.svc)} just nu enligt TMDB${SA_TOP.includes(topCfg.svc) && !cfg.saKey ? " – med en Streaming Availability-nyckel visas tjänstens egen topp 10" : ""}.`;
+  }catch(e){ if (seq === topSeq){ st.textContent = e.message; st.style.display = ""; } }
+}
+$("btnTop").onclick = openTop;
+document.querySelectorAll("#topType [data-toptype]").forEach(b => b.onclick = () => {
+  topCfg.type = b.dataset.toptype; store.set("top", topCfg); drawTopChips(); loadTop(); });
+document.querySelectorAll(".overlay [data-close]").forEach(b => b.onclick = () => b.closest(".overlay").classList.remove("open"));
+
+// ---------- Försvinner snart (Streaming Availability, change_type=expiring) ----------
+const expKey = () => "expiring|" + mySa().map(s=>s.key).join(",");
+async function expiringList(force=false){
+  const c = store.get(expKey(), null);
+  if (!force && c && Date.now() - c.t < 12*36e5) return c;
+  if (!cfg.saKey || !mySa().length) return c;
+  const items = []; let cursor;
+  for (let i = 0; i < 2; i++){
+    const r = await sa("/changes", { country:COUNTRY, catalogs:mySa().map(s=>s.key+".subscription").join(","),
+      change_type:"expiring", item_type:"show", order_direction:"asc", cursor });
+    for (const ch of r.changes || []){
+      const show = r.shows?.[ch.showId]; if (!show) continue;
+      items.push({ svc:ch.service?.id, ts:ch.timestamp || null, link:ch.link || null, show:slim(show) });
+    }
+    if (!r.hasMore) break;
+    cursor = r.nextCursor;
+  }
+  showUsage();
+  const res = { t:Date.now(), items };
+  store.set(expKey(), res);
+  return res;
+}
+function leavingFor(tmdbId){
+  if (!tmdbId) return [];
+  const now = Date.now()/1000 - 86400;
+  return (store.get(expKey(), null)?.items || [])
+    .filter(x => x.show.tmdbId === tmdbId && cfg.services.includes(x.svc) && (!x.ts || x.ts > now));
+}
+function leaveLabel(ts){
+  if (!isFinite(ts)) return "Försvinner snart (datum okänt)";
+  const d = new Date(ts*1000); d.setHours(0,0,0,0);
+  const t = new Date(); t.setHours(0,0,0,0);
+  const diff = Math.round((d-t)/864e5);
+  if (diff <= 0) return "Sista dagen idag";
+  if (diff === 1) return "Försvinner i morgon";
+  return "Försvinner " + d.toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" });
+}
+let soonSeq = 0;
+function openSoon(){ $("soonView").classList.add("open"); loadSoon(); }
+async function loadSoon(){
+  const seq = ++soonSeq, st = $("soonStatus"), out = $("soonResults");
+  out.innerHTML = ""; $("soonNote").textContent = "";
+  if (!cfg.saKey || !mySa().length){
+    st.textContent = "Försvinner snart kräver en Streaming Availability-nyckel under ⚙︎ (gäller Netflix, Prime Video, HBO Max, Apple TV, Disney+ och SkyShowtime).";
+    st.style.display = ""; return;
+  }
+  st.textContent = "Hämtar…"; st.style.display = "";
+  try{
+    const r = await expiringList();
+    if (seq !== soonSeq) return;
+    const byId = new Map(), old = Date.now()/1000 - 86400;
+    for (const x of r?.items || []){
+      if ((x.ts && x.ts < old) || !cfg.services.includes(x.svc)) continue;
+      let it = byId.get(x.show.tmdbId);
+      if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, leaves:{} }; byId.set(x.show.tmdbId, it); }
+      it.added[x.svc] = 0; it.links[x.svc] = x.link || it.links[x.svc]; it.leaves[x.svc] = x.ts;
+    }
+    const first = it => Math.min(...Object.values(it.leaves).map(t => t || Infinity));
+    const draw = () => {
+      if (seq !== soonSeq) return;
+      out.innerHTML = "";
+      const list = [...byId.values()].filter(it => { const mk = markOf("tmdb:"+it.show.tmdbId, it); return mk !== "seen" && mk !== "hidden"; })
+        .sort((a,b) => first(a) - first(b));
+      const want = list.filter(it => markOf("tmdb:"+it.show.tmdbId, it) === "want");
+      const groups = new Map();
+      if (want.length) groups.set("⭐ Från din Vill se-lista", want);
+      for (const it of list){
+        if (want.includes(it)) continue;
+        const lbl = leaveLabel(first(it));
+        if (!groups.has(lbl)) groups.set(lbl, []);
+        groups.get(lbl).push(it);
+      }
+      for (const [lbl, items] of groups){
+        const h = document.createElement("h3"); h.textContent = lbl; out.appendChild(h);
+        const g = document.createElement("div"); g.className = "grid"; out.appendChild(g);
+        for (const it of items){
+          const c = card("tmdb:"+it.show.tmdbId, it), f = first(it);
+          c.insertAdjacentHTML("beforeend", `<div class="m leave">⏳ ${isFinite(f) ? shortDate(f) : "snart"}</div>`);
+          g.appendChild(c);
+        }
+      }
+      st.style.display = list.length ? "none" : "";
+      if (!list.length) st.textContent = "Inget som försvinner från dina tjänster just nu.";
+    };
+    draw(); redraws.soonView = draw;
+    $("soonNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Tjänsterna meddelar inte alltid i förväg, så listan är inte komplett.`;
+  }catch(e){ if (seq === soonSeq){ st.textContent = e.message; st.style.display = ""; } }
+}
+$("btnSoon").onclick = openSoon;
+
+// ---------- Bevakning: Vill se dyker upp, ny säsong, försvinner snart ----------
+let alerts = store.get("alerts", []);   // { id, key, kind, text, t, item, done }
+function addAlert(a){
+  if (alerts.some(x => x.id === a.id)) return false;
+  alerts.unshift({ ...a, t:Date.now() });
+  alerts = alerts.slice(0, 40);
+  return true;
+}
+function renderAlerts(){
+  const el = $("alerts"); if (!el) return;
+  const list = alerts.filter(a => !a.done);
+  if (state.view === "want" || !list.length){ el.innerHTML = ""; return; }
+  el.innerHTML = `<h3>🔔 Bevakning</h3>` + list.map(a => {
+    const p = a.item && poster(a.item.show);
+    return `<div class="alert" data-aid="${esc(a.id)}">${p ? `<img src="${esc(p)}" alt="">` : ""}<div class="atxt">${esc(a.text)}</div><button data-adismiss="${esc(a.id)}" aria-label="Ta bort">✕</button></div>`;
+  }).join("");
+  el.querySelectorAll("[data-aid]").forEach(d => d.onclick = e => {
+    if (e.target.closest("[data-adismiss]")) return;
+    const a = alerts.find(x => x.id === d.dataset.aid);
+    if (a?.item) openDetail("tmdb:"+a.item.show.tmdbId, freshItem(a.item));
+  });
+  el.querySelectorAll("[data-adismiss]").forEach(b => b.onclick = () => {
+    const a = alerts.find(x => x.id === b.dataset.adismiss); if (a) a.done = true;
+    store.set("alerts", alerts); renderAlerts();
+  });
+}
+function alertItem(item, svcs){
+  const it = freshItem(item); it.search = true; it.added = {}; it.links = it.links || {}; it.approx = it.approx || {};
+  for (const k of svcs){
+    it.added[k] = 0;
+    if (!it.links[k]){ it.links[k] = `https://www.themoviedb.org/${item.show.tmdbId}/watch?locale=SE`; it.approx[k] = true; }
+  }
+  return it;
+}
+const fmtLong = d => new Date(d).toLocaleDateString("sv-SE",{ day:"numeric", month:"long" });
+let watchBusy = false;
+async function runWatch(force=false){
+  if (!cfg.tmdbKey || watchBusy) return;
+  if (!force && Date.now() - store.get("watchT", 0) < 6*36e5){ exportWatch(); return; }
+  watchBusy = true; store.set("watchT", Date.now());
+  let changed = false, fresh = 0;
+  try{
+    const entries = Object.entries(marks).filter(([,m]) => m.item?.show?.tmdbId &&
+      (m.status === "want" || (m.status === "seen" && m.item.show.showType === "series")));
+    for (let i = 0; i < entries.length; i += 8) await Promise.all(entries.slice(i, i+8).map(async ([key, m]) => {
+      const s = m.item.show;
+      try{
+        if (m.status === "want"){
+          delete providerCache[s.tmdbId];
+          const now = await myServicesFor(s.tmdbId);
+          const before = m.svcs || Object.keys(m.item.added || {});
+          const added = now.filter(k => !before.includes(k));
+          if (added.length && addAlert({ id:`avail|${key}|${added.join(",")}`, key, kind:"avail",
+              text:`${s.title} finns nu på ${added.map(svcLabel).join(" och ")}`, item:alertItem(m.item, now) })) fresh++;
+          m.svcs = now; changed = true;
+        }
+        if (s.showType === "series" && s.tmdbId.startsWith("tv/")){
+          const tv = await tmdbGet("/"+s.tmdbId, { language:"sv-SE" });
+          const aired = tv.last_episode_to_air?.season_number || 0;
+          if (m.seasons == null) m.seasons = aired;
+          else if (aired > m.seasons){
+            if (addAlert({ id:`season|${key}|${aired}`, key, kind:"season", text:`${s.title}: säsong ${aired} har kommit`, item:m.item })) fresh++;
+            m.seasons = aired;
+          }
+          const nx = tv.next_episode_to_air;
+          if (nx && nx.episode_number === 1 && nx.air_date && nx.season_number > m.seasons &&
+              addAlert({ id:`upcoming|${key}|${nx.season_number}`, key, kind:"upcoming",
+                         text:`${s.title}: säsong ${nx.season_number} kommer ${fmtLong(nx.air_date)}`, item:m.item })) fresh++;
+          changed = true;
+        }
+      }catch{}
+    }));
+    try{
+      const exp = await expiringList();
+      for (const x of exp?.items || []){
+        const m = marks[x.show.tmdbId];
+        if (m?.status !== "want" || !cfg.services.includes(x.svc)) continue;
+        if (addAlert({ id:`exp|${x.show.tmdbId}|${x.svc}`, key:x.show.tmdbId, kind:"expiring",
+            text:`${x.show.title} försvinner från ${svcLabel(x.svc)} ${x.ts ? fmtLong(x.ts*1000) : "snart"}`, item:m.item })) fresh++;
+      }
+    }catch{}
+  } finally { watchBusy = false; }
+  if (changed){ store.set("marks", marks); queueSync(); }
+  store.set("alerts", alerts);
+  renderAlerts(); exportWatch();
+  if (fresh) toast(`🔔 ${fresh} ${fresh === 1 ? "nyhet" : "nyheter"} i din bevakning`);
+}
+// Android-appen kollar bevakningen i bakgrunden och skickar notiser (window.TvBridge.setWatch).
+function exportWatch(){
+  if (!TV || typeof TV.setWatch !== "function" || !cfg.tmdbKey) return;
+  const want = [], series = [];
+  for (const m of Object.values(marks)){
+    const s = m.item?.show; if (!s?.tmdbId) continue;
+    if (m.status === "want") want.push({ id:s.tmdbId, title:s.title, svcs:m.svcs || Object.keys(m.item.added || {}) });
+    if ((m.status === "want" || m.status === "seen") && s.showType === "series" && s.tmdbId.startsWith("tv/") && m.seasons != null)
+      series.push({ id:s.tmdbId, title:s.title, seasons:m.seasons });
+  }
+  try{ TV.setWatch(JSON.stringify({ key:cfg.tmdbKey, services:mine().map(s => ({ key:s.key, label:s.label, pattern:s.match.source })), want, series })); }
+  catch(e){ console.warn("setWatch:", e); }
+}
+
+// ---------- För dig: rekommendationer utifrån det du markerat ----------
+let forYouBusy = false;
+async function renderForYou(){
+  const el = $("forYou"); if (!el) return;
+  if (state.view === "want" || !cfg.tmdbKey){ el.innerHTML = ""; return; }
+  const base = Object.values(marks).filter(m => (m.status === "want" || m.status === "seen") && m.item?.show?.tmdbId)
+    .sort((a,b) => b.t - a.t).slice(0, 8);
+  if (!base.length){ el.innerHTML = ""; return; }
+  const sig = base.map(m => m.item.show.tmdbId).join(",") + "|" + cfg.services.join(",");
+  let c = store.get("forYou", null);
+  if (!c || c.sig !== sig || Date.now() - c.t > 12*36e5){
+    if (forYouBusy) return;
+    forYouBusy = true;
+    try{
+      const score = new Map();
+      await Promise.all(base.map(async (m, bi) => {
+        const id = m.item.show.tmdbId, type = id.startsWith("movie/") ? "movie" : "tv";
+        try{
+          const r = await tmdbGet(`/${id}/recommendations`, { language:"sv-SE" });
+          (r.results || []).slice(0, 12).forEach((x, i) => {
+            if (!x.poster_path) return;
+            const k = type+"/"+x.id, e = score.get(k) || { x, type, s:0 };
+            e.s += (m.status === "want" ? 1.2 : 1) * (1 - i/24) * (1 - bi/16);
+            score.set(k, e);
+          });
+        }catch{}
+      }));
+      const marked = new Set(Object.entries(marks).filter(([,m]) => m.status).map(([k]) => k));
+      const cands = [...score.entries()].filter(([k]) => !marked.has(k)).sort((a,b) => b[1].s - a[1].s)
+        .slice(0, 40).map(([,e]) => searchItem(e.x, e.type));
+      await fillServices(cands);
+      c = { t:Date.now(), sig, items:cands.filter(it => Object.keys(it.added).length).slice(0, 15) };
+      store.set("forYou", c);
+    } finally { forYouBusy = false; }
+  }
+  const items = c.items.filter(it => !markOf("tmdb:"+it.show.tmdbId, it))
+    .filter(it => state.type === "all" || it.show.showType === state.type);
+  if (!items.length){ el.innerHTML = ""; return; }
+  el.innerHTML = `<h3>✨ För dig</h3>`;
+  const row = document.createElement("div"); row.className = "hrow"; el.appendChild(row);
+  items.forEach(it => row.appendChild(card("tmdb:"+it.show.tmdbId, freshItem(it))));
+}
+
+// ---------- Betyg från IMDb, Rotten Tomatoes och Metacritic (OMDb) ----------
+async function ratingsFor(imdb){
+  const cache = store.get("omdb", {});
+  if (cache[imdb] && Date.now() - cache[imdb].t < 7*864e5) return cache[imdb];
+  const r = await fetch(`https://www.omdbapi.com/?i=${encodeURIComponent(imdb)}&apikey=${encodeURIComponent(cfg.omdbKey)}`);
+  const j = await r.json();
+  if (j.Response === "False") throw new Error(j.Error || "OMDb");
+  const na = v => v && v !== "N/A" ? v : null;
+  const res = { t:Date.now(), imdb:na(j.imdbRating), rt:na((j.Ratings || []).find(x => x.Source === "Rotten Tomatoes")?.Value), mc:na(j.Metascore) };
+  const keys = Object.keys(cache); if (keys.length > 400) delete cache[keys[0]];
+  cache[imdb] = res; store.set("omdb", cache);
+  return res;
+}
+async function renderRatings(s, imdb){
+  const el = $("ratings"); if (!el || !imdb) return;
+  const link = `https://www.imdb.com/title/${encodeURIComponent(imdb)}/`;
+  if (!cfg.omdbKey){ el.innerHTML = `<a href="${esc(link)}" target="_blank" rel="noopener">Visa på IMDb ↗</a>`; return; }
+  try{
+    const r = await ratingsFor(imdb);
+    if ($("detail").dataset.cur !== s.tmdbId) return;
+    const parts = [];
+    if (r.imdb) parts.push(`<a href="${esc(link)}" target="_blank" rel="noopener"><b>IMDb</b> ${esc(r.imdb)}</a>`);
+    if (r.rt) parts.push(`🍅 ${esc(r.rt)}`);
+    if (r.mc) parts.push(`Metacritic ${esc(r.mc)}`);
+    el.innerHTML = parts.length ? parts.join(" · ") : `<a href="${esc(link)}" target="_blank" rel="noopener">Visa på IMDb ↗</a>`;
+  }catch{ el.innerHTML = `<a href="${esc(link)}" target="_blank" rel="noopener">Visa på IMDb ↗</a>`; }
+}
+
+// ---------- Synk mellan enheter via en privat GitHub-gist ----------
+const GIST_FILE = "nytt-att-se.json";
+let syncTimer = null, syncBusy = false;
+function setSyncStatus(t){ store.set("syncMsg", t); if ($("syncStatus")) $("syncStatus").textContent = t; }
+function queueSync(){ if (!cfg.ghToken) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 4000); }
+async function gh(path, opts={}){
+  const r = await fetch("https://api.github.com"+path, { ...opts, headers:{ Authorization:"Bearer "+cfg.ghToken,
+    Accept:"application/vnd.github+json", ...(opts.body ? { "Content-Type":"application/json" } : {}) } });
+  if (r.status === 401) throw new Error("GitHub-token godtogs inte.");
+  if (r.status === 403 || r.status === 404) throw new Error("Token saknar behörighet för gists.");
+  if (!r.ok) throw new Error("GitHub svarade "+r.status);
+  return r.json();
+}
+async function findGist(){
+  const id = store.get("gistId", null);
+  if (id) return id;
+  for (let page = 1; page <= 5; page++){
+    const list = await gh(`/gists?per_page=100&page=${page}`);
+    const g = list.find(g => g.files && g.files[GIST_FILE]);
+    if (g){ store.set("gistId", g.id); return g.id; }
+    if (list.length < 100) break;
+  }
+  return null;
+}
+async function syncNow(){
+  if (!cfg.ghToken || syncBusy) return;
+  syncBusy = true; setSyncStatus("Synkar…");
+  try{
+    let id = await findGist(), remote = {};
+    if (id){
+      let g;
+      try{ g = await gh("/gists/"+id); }catch(e){ store.set("gistId", null); throw e; }
+      const f = g.files?.[GIST_FILE];
+      if (f){
+        const txt = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+        try{ remote = JSON.parse(txt).marks || {}; }catch{}
+      }
+    }
+    // Slå ihop: för varje titel vinner den senaste ändringen.
+    const merged = { ...marks };
+    for (const [k, v] of Object.entries(remote)) if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
+    const diff = (a, b) => Object.keys(a).some(k => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+    const localChanged = diff(merged, marks), remoteChanged = !id || diff(merged, remote);
+    marks = merged; store.set("marks", marks);
+    if (remoteChanged){
+      const files = { [GIST_FILE]:{ content:JSON.stringify({ v:1, updated:new Date().toISOString(), marks }) } };
+      if (!id){
+        const g = await gh("/gists", { method:"POST", body:JSON.stringify({ description:"Nytt att se – markeringar (synk)", public:false, files }) });
+        store.set("gistId", g.id);
+      } else await gh("/gists/"+id, { method:"PATCH", body:JSON.stringify({ files }) });
+    }
+    store.set("syncT", Date.now());
+    setSyncStatus("Synkad " + new Date().toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) + ".");
+    if (localChanged){ render(); redrawOverlays(); exportWatch(); }
+  }catch(e){ setSyncStatus("Synken misslyckades: " + e.message); }
+  finally{ syncBusy = false; }
+}
+
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
 document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
 
@@ -1048,25 +1525,38 @@ document.getElementById("btnMore").onclick = ()=>load(false,true);
 
 // inställningar
 $("btnSettings").onclick = ()=>{
-  $("source").value=cfg.source; $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("minYear").value=cfg.minYear;
+  $("source").value=cfg.source; $("saKey").value=cfg.saKey; $("saSource").value=cfg.saSource; $("tmdbKey").value=cfg.tmdbKey; $("omdbKey").value=cfg.omdbKey||""; $("ghToken").value=cfg.ghToken||""; $("minYear").value=cfg.minYear;
   $("serviceBoxes").innerHTML = SERVICES.map(s=>`<label class="chk"><input type="checkbox" value="${s.key}" ${cfg.services.includes(s.key)?"checked":""}> ${s.label}</label>`).join("");
   $("langOn").checked = cfg.langOn;
   $("langBoxes").innerHTML = LANGS.map(l=>`<label class="chk"><input type="checkbox" value="${l.code}" ${cfg.langs.includes(l.code)?"checked":""}> ${l.label}</label>`).join("");
   renderTvSection();
+  if (store.get("syncMsg", null) && cfg.ghToken) $("syncStatus").textContent = store.get("syncMsg");
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
 $("saveSettings").onclick = e=>{ e.preventDefault();
   const prev = cfg;
   cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim(),
+          omdbKey:$("omdbKey").value.trim(), ghToken:$("ghToken").value.trim(),
           langOn: $("langOn").checked,
           langs:[...document.querySelectorAll("#langBoxes input:checked")].map(x=>x.value),
           services:[...document.querySelectorAll("#serviceBoxes input:checked")].map(x=>x.value),
           minYear: +$("minYear").value || prev.minYear, yearOn: prev.yearOn, source: $("source").value };
   store.set("cfg2",cfg); state.svc = new Set(cfg.services); closeSheets(); updateYearBtn();
   // Ladda om från API:t bara om nycklarna ändrats – annars räcker cachen (sparar anrop).
-  load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource || (cfg.source==="tmdb" && prev.tmdbKey!==cfg.tmdbKey)); };
+  load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource || (cfg.source==="tmdb" && prev.tmdbKey!==cfg.tmdbKey));
+  if (cfg.ghToken && cfg.ghToken !== prev.ghToken){ store.set("gistId", null); syncNow(); }
+  exportWatch(); };
+$("syncNowBtn").onclick = e => { e.preventDefault(); if (!$("ghToken").value.trim()) return setSyncStatus("Klistra in en GitHub-token och tryck Spara först."); syncNow(); };
+$("watchNowBtn").onclick = async e => { e.preventDefault(); toast("Kollar bevakningen…");
+  await runWatch(true);
+  try{ TV && typeof TV.checkWatchNow === "function" && TV.checkWatchNow(); }catch{}
+  if (!alerts.some(a => !a.done)) toast("Inget nytt i bevakningen just nu."); };
 
 load();
+setTimeout(async () => { if (cfg.ghToken) await syncNow(); runWatch(); }, 1200);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && cfg.ghToken && Date.now() - store.get("syncT", 0) > 5*6e4) syncNow();
+});
 </script>
 </body>
 </html>

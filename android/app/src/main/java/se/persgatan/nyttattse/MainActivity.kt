@@ -1,9 +1,12 @@
 package se.persgatan.nyttattse
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
@@ -112,6 +115,23 @@ class MainActivity : Activity() {
             if (host.isEmpty()) throw TvRemote.TvException("Välj och parkoppla en TV under ⚙︎ först.")
             tv.launch(host, url)
             "ok"
+        }
+
+        // Bevakningslistan från webbappen; kollas i bakgrunden av WatchJob och ger notiser.
+        @JavascriptInterface fun setWatch(json: String) {
+            getSharedPreferences("watch", MODE_PRIVATE).edit().putString("cfg", json).apply()
+            runOnUiThread {
+                if (Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("askedNotif", false) &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    prefs.edit().putBoolean("askedNotif", true).apply()
+                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
+                }
+                WatchJob.schedule(this@MainActivity)
+            }
+        }
+
+        @JavascriptInterface fun checkWatchNow() = worker.execute {
+            try { WatchChecker.run(this@MainActivity) } catch (_: Exception) {}
         }
 
         @JavascriptInterface fun openExternal(url: String) = runOnUiThread {
