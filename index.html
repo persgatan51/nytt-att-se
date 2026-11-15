@@ -1303,21 +1303,102 @@ $("btnSoon").onclick = openSoon;
 // ---------- Kommande (Streaming Availability, change_type=upcoming) ----------
 // Nya titlar och nya säsonger som tjänsterna aviserat. Hämtas för alla dina tjänster på en gång
 // (2 anrop, sparas 12 timmar) och filtreras sedan per tjänst i appen.
-const upKey = () => "upcoming|" + mySa().map(s=>s.key).join(",");
+const upKey = () => "upcoming3|" + cfg.services.join(",") + "|" + (cfg.saKey ? "sa" : "") + (cfg.tmdbKey ? "tmdb" : "");
 const upCfg = Object.assign({ svc:"all", type:"all" }, store.get("up", {}));
+// TMDB: tjänsternas egna serier/filmer med aviserade premiärer, ofta månader i förväg.
+// Nätverks-id kontrolleras mot namnet vid första användningen (fel id hoppas över).
+const UP_NETWORKS = { netflix:[213], prime:[1024], apple:[2552], disney:[2739], hbo:[3186, 49] };
+const UP_NETNAME  = { netflix:/netflix/i, prime:/amazon|prime/i, apple:/apple/i, disney:/disney/i, hbo:/hbo|max/i };
+const UP_COMPANIES = { netflix:["Netflix"], apple:["Apple Original Films"], prime:["Amazon MGM Studios", "Amazon Studios"] };
+const canUpcoming = s => (cfg.saKey && s.src === "sa") || (cfg.tmdbKey && UP_NETWORKS[s.key]);
+async function upNetworks(svc){
+  const known = store.get("upNet", {});
+  const out = [];
+  for (const id of UP_NETWORKS[svc] || []){
+    if (known[id] === undefined){
+      try{ known[id] = UP_NETNAME[svc].test((await tmdbGet(`/network/${id}`)).name || ""); }catch{ known[id] = false; }
+      store.set("upNet", known);
+    }
+    if (known[id]) out.push(id);
+  }
+  return out;
+}
+async function upCompanies(svc){
+  const known = store.get("upComp", {});
+  const out = [];
+  for (const name of UP_COMPANIES[svc] || []){
+    if (known[name] === undefined){
+      try{
+        const r = await tmdbGet("/search/company", { query:name });
+        known[name] = (r.results || []).find(c => c.name.toLowerCase() === name.toLowerCase())?.id || 0;
+      }catch{ known[name] = 0; }
+      store.set("upComp", known);
+    }
+    if (known[name]) out.push(known[name]);
+  }
+  return out;
+}
+const isoDay = d => d.toISOString().slice(0,10);
+const tsOf = d => Math.floor(new Date(d+"T12:00:00").getTime()/1000);
+async function tmdbUpcoming(svc){
+  const today = new Date(), iso = isoDay(today);
+  const plus = days => isoDay(new Date(today.getTime() + days*864e5));
+  const items = [], nets = await upNetworks(svc), comps = await upCompanies(svc);
+  const base = { language:"sv-SE", include_adult:"false" };
+  if (nets.length){
+    // Nya serier
+    for (const page of [1, 2]){
+      const r = await tmdbGet("/discover/tv", { ...base, with_networks:nets.join("|"), sort_by:"first_air_date.asc",
+        "first_air_date.gte":iso, "first_air_date.lte":plus(240), page });
+      for (const x of r.results || []) if (x.first_air_date)
+        items.push({ svc, ts:tsOf(x.first_air_date), season:null, show:searchItem(x, "tv").show, src:"tmdb" });
+      if ((r.total_pages || 1) <= page) break;
+    }
+    // Nya säsonger av befintliga serier: serier med avsnitt de närmaste månaderna där nästa avsnitt är avsnitt 1.
+    const r = await tmdbGet("/discover/tv", { ...base, with_networks:nets.join("|"), sort_by:"popularity.desc",
+      "air_date.gte":iso, "air_date.lte":plus(150), "first_air_date.lte":iso });
+    const cands = (r.results || []).slice(0, 20);
+    for (let i = 0; i < cands.length; i += 10) await Promise.all(cands.slice(i, i+10).map(async x => {
+      try{
+        const d = await tmdbGet(`/tv/${x.id}`, { language:"sv-SE" });
+        const nx = d.next_episode_to_air;
+        if (nx && nx.episode_number === 1 && nx.season_number > 1 && nx.air_date)
+          items.push({ svc, ts:tsOf(nx.air_date), season:nx.season_number, show:searchItem(x, "tv").show, src:"tmdb" });
+      }catch{}
+    }));
+  }
+  if (comps.length){
+    const r = await tmdbGet("/discover/movie", { ...base, with_companies:comps.join("|"), sort_by:"primary_release_date.asc",
+      "primary_release_date.gte":iso, "primary_release_date.lte":plus(365) });
+    for (const x of r.results || []) if (x.release_date && (x.poster_path || x.popularity > 5))
+      items.push({ svc, ts:tsOf(x.release_date), season:null, show:searchItem(x, "movie").show, src:"tmdb", movie:true });
+  }
+  return items;
+}
 async function upcomingList(){
   const c = store.get(upKey(), null);
   if (c && Date.now() - c.t < 12*36e5) return c;
   const items = [];
-  for (const itemType of ["show", "season"]){
-    const r = await sa("/changes", { country:COUNTRY, catalogs:mySa().map(s=>s.key+".subscription").join(","),
-      change_type:"upcoming", item_type:itemType, order_direction:"asc" });
-    for (const ch of r.changes || []){
-      const show = r.shows?.[ch.showId]; if (!show) continue;
-      items.push({ svc:ch.service?.id, ts:ch.timestamp || null, season:ch.season || null, link:ch.link || null, show:slim(show) });
+  if (cfg.saKey && mySa().length){
+    for (const itemType of ["show", "season"]){
+      try{
+        const r = await sa("/changes", { country:COUNTRY, catalogs:mySa().map(s=>s.key+".subscription").join(","),
+          change_type:"upcoming", item_type:itemType, order_direction:"asc" });
+        for (const ch of r.changes || []){
+          const show = r.shows?.[ch.showId]; if (!show) continue;
+          items.push({ svc:ch.service?.id, ts:ch.timestamp || null, season:ch.season || null, link:ch.link || null, show:slim(show), src:"sa" });
+        }
+      }catch(e){ if (!cfg.tmdbKey) throw e; console.warn("Kommande (SA):", e); }
     }
+    showUsage();
   }
-  showUsage();
+  if (cfg.tmdbKey){
+    const svcs = mine().filter(s => UP_NETWORKS[s.key]);
+    const res = await Promise.all(svcs.map(s => tmdbUpcoming(s.key).catch(e => { console.warn("Kommande (TMDB):", e); return []; })));
+    // Exakta svenska datum från Streaming Availability går före TMDB:s premiärdatum.
+    const have = new Set(items.map(x => x.show.tmdbId + "|" + (x.season || "") + "|" + x.svc));
+    for (const x of res.flat()) if (!have.has(x.show.tmdbId + "|" + (x.season || "") + "|" + x.svc)) items.push(x);
+  }
   const res = { t:Date.now(), items };
   store.set(upKey(), res);
   return res;
@@ -1334,12 +1415,12 @@ function comeLabel(ts){
 let upSeq = 0;
 function openUpcoming(){
   $("upView").classList.add("open");
-  if (upCfg.svc !== "all" && !mySa().some(s => s.key === upCfg.svc)) upCfg.svc = "all";
+  if (upCfg.svc !== "all" && !mine().some(s => s.key === upCfg.svc && canUpcoming(s))) upCfg.svc = "all";
   drawUpChips(); loadUpcoming();
 }
 function drawUpChips(){
   $("upSvc").innerHTML = [`<button data-usvc="all" class="${upCfg.svc==="all"?"on":""}">Alla tjänster</button>`,
-    ...mySa().map(s => `<button data-usvc="${s.key}" class="${s.key===upCfg.svc?"on":""}">${esc(s.label)}</button>`)].join("");
+    ...mine().filter(canUpcoming).map(s => `<button data-usvc="${s.key}" class="${s.key===upCfg.svc?"on":""}">${esc(s.label)}</button>`)].join("");
   $("upSvc").querySelectorAll("[data-usvc]").forEach(b => b.onclick = () => {
     upCfg.svc = b.dataset.usvc; store.set("up", upCfg); drawUpChips(); redraws.upView && redraws.upView(); });
   document.querySelectorAll("#upType [data-uptype]").forEach(b => b.classList.toggle("on", b.dataset.uptype === upCfg.type));
@@ -1347,11 +1428,11 @@ function drawUpChips(){
 async function loadUpcoming(){
   const seq = ++upSeq, st = $("upStatus"), out = $("upResults");
   out.innerHTML = ""; $("upNote").textContent = "";
-  if (!cfg.saKey || !mySa().length){
-    st.textContent = "Kommande kräver en Streaming Availability-nyckel under ⚙︎ (gäller Netflix, Prime Video, HBO Max, Apple TV, Disney+ och SkyShowtime).";
+  if (!mine().some(canUpcoming)){
+    st.textContent = "Kommande kräver en TMDB- eller Streaming Availability-nyckel under ⚙︎.";
     st.style.display = ""; return;
   }
-  st.textContent = "Hämtar…"; st.style.display = "";
+  st.textContent = "Hämtar kommande… (första gången kan det ta några sekunder)"; st.style.display = "";
   try{
     const r = await upcomingList();
     if (seq !== upSeq) return;
@@ -1367,9 +1448,12 @@ async function loadUpcoming(){
         if (upCfg.type !== "all" && x.show.showType !== upCfg.type) continue;
         const id = x.show.tmdbId + "|" + (x.season || "");
         let it = byId.get(id);
-        if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, ts:x.ts, season:x.season }; byId.set(id, it); }
-        it.added[x.svc] = 0; if (x.link) it.links[x.svc] = x.link;
-        if (x.ts && (!it.ts || x.ts < it.ts)) it.ts = x.ts;
+        if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, ts:x.ts, season:x.season, movie:x.movie }; byId.set(id, it); }
+        it.added[x.svc] = 0;
+        if (x.link) it.links[x.svc] = x.link;
+        else if (!it.links[x.svc]){ it.links[x.svc] = `https://www.themoviedb.org/${x.show.tmdbId}`; it.approx[x.svc] = true; }
+        if (x.src === "sa"){ it.sa = true; if (x.ts){ it.ts = x.ts; it.saTs = true; } }   // svenskt datum vinner
+        else if (x.ts && !it.saTs && (!it.ts || x.ts < it.ts)) it.ts = x.ts;
       }
       const list = [...byId.values()].filter(it => markOf("tmdb:"+it.show.tmdbId, it) !== "hidden")
         .sort((a,b) => (a.ts || Infinity) - (b.ts || Infinity));
@@ -1381,6 +1465,7 @@ async function loadUpcoming(){
         for (const it of items){
           const c = card("tmdb:"+it.show.tmdbId, it);
           if (it.season) c.querySelector(".t").insertAdjacentHTML("afterend", `<div class="m" style="color:var(--acc)">Säsong ${it.season}</div>`);
+          else if (it.movie && !it.sa) c.querySelector(".t").insertAdjacentHTML("afterend", `<div class="m">Premiär – kan gå på bio först</div>`);
           g.appendChild(c);
         }
       }
@@ -1388,7 +1473,7 @@ async function loadUpcoming(){
       if (!list.length) st.textContent = upCfg.svc === "all" ? "Inget aviserat på dina tjänster just nu." : `Inget aviserat på ${svcLabel(upCfg.svc)} just nu.`;
     };
     draw(); redraws.upView = draw;
-    $("upNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Tryck ⭐ Vill se på något som kommer, så säger bevakningen till när det finns att se.`;
+    $("upNote").textContent = `Uppdaterad ${new Date(r.t).toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}. Datum från tjänsterna (Streaming Availability) när de finns, annars aviserade premiärer från TMDB – mest tjänsternas egna serier och filmer. Tryck ⭐ Vill se på något som kommer, så säger bevakningen till när det finns att se.`;
   }catch(e){ if (seq === upSeq){ st.textContent = e.message; st.style.display = ""; } }
 }
 $("btnUpcoming").onclick = openUpcoming;

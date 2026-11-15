@@ -28,12 +28,20 @@ def tmdb(route):
     if path.startswith("/watch/providers/"): body={"results":[{"provider_id":8,"provider_name":"Netflix"},{"provider_id":76,"provider_name":"Viaplay"}]}
     elif path.startswith("/search/"): body={"results":[dict(mk(i), media_type="movie") for i in range(300,306)]}
     elif path.startswith("/genre/"): body={"genres":[{"id":28,"name":"action"},{"id":35,"name":"komedi"}]}
+    elif path.startswith("/discover/") and ("first_air_date.gte" in u or "primary_release_date.gte" in u):
+        fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*40))
+        body={"page":1,"total_pages":1,"results":[dict(mk(i), first_air_date=fut, release_date=fut) for i in range(950,953)]}
+    elif path.startswith("/discover/tv") and "air_date.gte" in u:
+        body={"page":1,"total_pages":1,"results":[mk(960)]}
     elif path.startswith("/discover/"): body={"page":1,"total_pages":3,"results":[mk(i) for i in range(100,110)]}
+    elif path.startswith("/network/"): body={"name":{"213":"Netflix","2552":"Apple TV+"}.get(path.split("/")[2],"Annat")}
+    elif path.startswith("/search/company"): body={"results":[{"id":178464,"name":"Netflix"}]}
     elif path.endswith("/watch/providers"):
         n=int(path.split("/")[2]); body={"results":{"SE":{"flatrate":[{"provider_name":"Netflix" if n%2==0 else "Okänd"}]}}}
     elif path.endswith("/recommendations"): body={"results":[mk(i) for i in range(400,412)]}
     elif re.match(r"^/tv/\d+$", path):
-        body={"overview":"Svensk","last_episode_to_air":{"season_number":3},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
+        fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*20))
+        body={"overview":"Svensk","next_episode_to_air":{"episode_number":1,"season_number":4,"air_date":fut},"last_episode_to_air":{"season_number":3},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
               "recommendations":{"results":[mk(i) for i in range(200,210)]},"external_ids":{"imdb_id":"tt999"}}
     elif re.match(r"^/movie/\d+$", path):
         body={"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[],"crew":[]},"videos":{"results":[]},
@@ -121,10 +129,11 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("closeSheets()"); pg.locator("#soonView [data-close]").click()
 
     pg.click("#btnUpcoming"); pg.wait_for_timeout(800)
-    check(pg.locator("#upResults .item").count() == 2 and "Säsong 2" in pg.locator("#upResults").inner_text(),
-          "kommande: " + " | ".join(pg.locator('#upResults h3').all_inner_texts()))
+    n = pg.locator("#upResults .item").count(); txt = pg.locator("#upResults").inner_text()
+    check(n >= 6 and "Säsong 2" in txt and "Säsong 4" in txt and "Film 950" in txt,
+          f"kommande ({n} titlar): " + " | ".join(pg.locator('#upResults h3').all_inner_texts()))
     pg.click("#upType [data-uptype='series']"); pg.wait_for_timeout(200)
-    check(pg.locator("#upResults .item").count() == 1, "kommande: filter på serier")
+    check(0 < pg.locator("#upResults .item").count() < n, "kommande: filter på serier")
     pg.locator("#upView [data-close]").click()
 
     pg.click("#btnSearch"); pg.fill("#q", "film"); pg.wait_for_timeout(1200)

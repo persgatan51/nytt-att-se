@@ -1,6 +1,15 @@
 [
   {
     "date": "2026-11-15",
+    "title": "Mer i Kommande",
+    "changes": [
+      "Kommande visar nu även aviserade premiärer från TMDB, ofta månader i förväg – särskilt tjänsternas egna serier och filmer (t.ex. Apple TV+ och Netflix).",
+      "Nya säsonger av befintliga serier syns när premiärdatumet är känt.",
+      "Exakta svenska datum från tjänsterna används när de finns. Filmer med bara premiärdatum märks, eftersom de kan gå på bio först."
+    ]
+  },
+  {
+    "date": "2026-11-15",
     "title": "Kommande per tjänst",
     "changes": [
       "📅 Kommande: se vilka filmer, serier och nya säsonger som är på väg till dina tjänster, per dag.",
