@@ -30,6 +30,8 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var tv: TvRemote
     private val worker = Executors.newSingleThreadExecutor()
+    // Bevakningen har en egen tråd, så att en lång koll inte blockerar TV-kommandona.
+    private val watchWorker = Executors.newSingleThreadExecutor()
     private val prefs by lazy { getSharedPreferences("tv", MODE_PRIVATE) }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -119,7 +121,13 @@ class MainActivity : Activity() {
 
         // Bevakningslistan från webbappen; kollas i bakgrunden av WatchJob och ger notiser.
         @JavascriptInterface fun setWatch(json: String) {
-            getSharedPreferences("watch", MODE_PRIVATE).edit().putString("cfg", json).apply()
+            // Skrivs med samma lås som WatchChecker.run, så att en pågående bakgrundskoll inte
+            // skriver tillbaka en äldre lista över den nya (och utan att JavaScript får vänta).
+            watchWorker.execute {
+                synchronized(WatchChecker) {
+                    getSharedPreferences("watch", MODE_PRIVATE).edit().putString("cfg", json).commit()
+                }
+            }
             runOnUiThread {
                 if (Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("askedNotif", false) &&
                     checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -130,8 +138,21 @@ class MainActivity : Activity() {
             }
         }
 
-        @JavascriptInterface fun checkWatchNow() = worker.execute {
+        @JavascriptInterface fun checkWatchNow() = watchWorker.execute {
             try { WatchChecker.run(this@MainActivity) } catch (_: Exception) {}
+        }
+
+        // Om notiser är avstängda visar webbappen en knapp under ⚙︎ som öppnar inställningen.
+        @JavascriptInterface fun notifEnabled(): Boolean =
+            getSystemService(android.app.NotificationManager::class.java)?.areNotificationsEnabled() != false &&
+            (Build.VERSION.SDK_INT < 33 ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+
+        @JavascriptInterface fun openNotifSettings() = runOnUiThread {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
+            } catch (_: Exception) {}
         }
 
         @JavascriptInterface fun openExternal(url: String) = runOnUiThread {

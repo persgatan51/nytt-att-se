@@ -161,6 +161,31 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check('"movie/700":{"status":null' in (gist["content"] or ""), "ångrad markering synkas")
     pg.evaluate("closeSheets()"); pg.click("#btnSettings"); pg.click("#openChangelog"); pg.wait_for_timeout(500)
     check(pg.locator("#changelogBody .cl").count() > 0, f"ändringsloggen visar {pg.locator('#changelogBody .cl').count()} poster")
+    pg.evaluate("closeSheets()")
+
+    # Länkar och tjänstnycklar från API/gist får inte kunna köra skript.
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/991', title:'Elak', imageSet:{}, releaseYear:'2020<img src=x onerror=window.__xss=1>' },
+        added:{ netflix:0, 'z"><img src=x onerror=window.__xss=1>':0 }, links:{ netflix:'javascript:window.__xss=1', 'z"><img src=x onerror=window.__xss=1>':'https://a.se' }, approx:{} })""")
+    pg.wait_for_timeout(500)
+    check(pg.locator("#detailBody a[href^='javascript']").count() == 0 and pg.evaluate("window.__xss") is None
+          and pg.locator("#detailBody img[src='x']").count() == 0, "detaljvyn släpper inte igenom javascript:-länkar eller HTML i tjänstnycklar")
+    pg.evaluate("closeSheets()")
+
+    # Samtidiga hämtningar av samma dagslista delas.
+    n = pg.evaluate("""async () => { let n = 0; const f = () => new Promise(r => setTimeout(() => { n++; r({ items:[] }); }, 50));
+        await Promise.all([daily('test|x', f, true), daily('test|x', f, true)]); return n; }""")
+    check(n == 1, f"samtidiga hämtningar av en dagslista görs en gång ({n})")
+    check(pg.evaluate("!freshToday({ day:dayKey(), partial:true, t:Date.now() - 2*36e5 }) && freshToday({ day:dayKey(), partial:true, t:Date.now() })"),
+          "reservlista räknas som färsk bara en timme")
+
+    # ⭐ på en titel från Kommande som inte kommit ut: bevakningen ska se den som otillgänglig.
+    svcs = pg.evaluate("""() => { setMark('x', { show:{ showType:'movie', tmdbId:'movie/990', title:'Kommer snart', imageSet:{} },
+        added:{ netflix:0 }, links:{}, approx:{}, notYet:true, ts:Date.now()/1000 + 86400 }, 'want'); return marks['movie/990'].svcs; }""")
+    check(svcs == [], f"Vill se från Kommande bevakas tills titeln kommer ({svcs})")
+
+    # En ändring under pågående synk körs när synken är klar.
+    check(pg.evaluate("() => { syncBusy = true; syncNow(); const r = syncAgain; syncBusy = false; syncAgain = false; return r; }"),
+          "ändring under pågående synk köas")
     b.close()
 
 print("JS-fel:" , [e for e in errs if e.startswith("JS")])

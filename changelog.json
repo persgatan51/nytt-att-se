@@ -1,5 +1,18 @@
 [
   {
+    "date": "2026-11-16",
+    "title": "Buggrättningar",
+    "changes": [
+      "Bevakningen säger nu till när en titel du ⭐-märkt i Kommande kommer ut på din tjänst.",
+      "Om en tjänsts egen topplista eller Kommande inte gick att hämta försöker appen igen efter en timme i stället för först nästa dag.",
+      "Samma lista hämtas inte längre två gånger om du byter vy snabbt, vilket sparar på API-gränsen.",
+      "Markeringar du gör medan synken pågår skickas direkt efteråt.",
+      "Android-appen: om notiser är avstängda finns en knapp under ⚙︎ för att slå på dem.",
+      "Android-appen: en bakgrundskoll kan inte längre skriva över nyss gjorda ändringar i bevakningen, och Spela på TV behöver inte vänta på den.",
+      "Säkrare hantering av länkar och data från tjänsterna och synken."
+    ]
+  },
+  {
     "date": "2026-11-15",
     "title": "Snabbare Upptäck",
     "changes": [

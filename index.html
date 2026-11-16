@@ -347,19 +347,28 @@ const bigCache = (() => {
   };
 })();
 const dayKey = () => new Date().toLocaleDateString("sv-SE");
-const freshToday = c => c && c.day === dayKey();
+// En lista som bara delvis kunde hämtas (partial, t.ex. reservlista från TMDB) gäller bara en timme.
+const freshToday = c => c && c.day === dayKey() && (!c.partial || Date.now() - c.t < 36e5);
 // Hämtar en dagslista: sparad från idag används direkt, annars hämtas ny (och vid fel visas den gamla).
-async function daily(key, fetcher, force=false){
-  const c = await bigCache.get(key);
-  if (!force && freshToday(c)) return c;
-  try{
-    const res = { ...(await fetcher()), t:Date.now(), day:dayKey() };
-    await bigCache.set(key, res);
-    return res;
-  }catch(e){
-    if (c) return { ...c, stale:true };
-    throw e;
-  }
+// Pågående hämtningar delas, så att samma lista inte hämtas två gånger samtidigt.
+const dailyInflight = new Map();
+function daily(key, fetcher, force=false){
+  if (dailyInflight.has(key)) return dailyInflight.get(key);
+  const p = (async () => {
+    const c = await bigCache.get(key);
+    if (!force && freshToday(c)) return c;
+    try{
+      const res = { ...(await fetcher()), t:Date.now(), day:dayKey() };
+      await bigCache.set(key, res);
+      return res;
+    }catch(e){
+      if (c) return { ...c, stale:true };
+      throw e;
+    }
+  })();
+  dailyInflight.set(key, p);
+  p.finally(() => dailyInflight.delete(key)).catch(() => {});
+  return p;
 }
 // Rensa gamla listor ur localStorage (flyttade till IndexedDB).
 try{ Object.keys(localStorage).filter(k => /^(top\d?\||upcoming\d?\||expiring\|)/.test(k)).forEach(k => localStorage.removeItem(k)); }catch{}
@@ -394,7 +403,12 @@ function setMark(id, it, status){
   if (id !== key) delete marks[id];
   // Ångrad markering sparas som { status:null } så att borttagningen också synkas till andra enheter.
   if (!status || marks[key]?.status === status) marks[key] = { status:null, t:Date.now() };       // tryck igen = ångra
-  else marks[key] = { status, t:Date.now(), item:snapshot(it) };
+  else{
+    marks[key] = { status, t:Date.now(), item:snapshot(it) };
+    // En titel från Kommande som inte har kommit ut än: räkna den som inte tillgänglig någonstans,
+    // så att bevakningen (även Android-notisen) säger till när den dyker upp.
+    if (status === "want" && it.notYet && (!it.ts || it.ts > Date.now()/1000)) marks[key].svcs = [];
+  }
   store.set("marks", marks);
   queueSync(); exportWatch();
 }
@@ -609,11 +623,14 @@ function excludedByLanguage(show){
 
 // ---------- hjälpfunktioner ----------
 const latest = it => Math.max(0, ...Object.entries(it.added).filter(([k])=>state.svc.has(k)).map(([,v])=>v));
-const year = s => s.releaseYear || s.firstAirYear || "";
+// Bara siffror – året kan komma från en synkad gist och skrivs rakt in i HTML.
+const year = s => String(s.releaseYear || s.firstAirYear || "").replace(/\D/g, "");
 const poster = s => s.imageSet?.verticalPoster?.w360 || s.imageSet?.verticalPoster?.w240 || "";
 const backdrop = s => s.imageSet?.horizontalBackdrop?.w720 || s.imageSet?.horizontalPoster?.w720 || "";
-const svcLabel = k => SERVICES.find(s=>s.key===k)?.label || k;
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const svcLabel = k => SERVICES.find(s=>s.key===k)?.label || esc(k);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// Länkar från API:er och den synkade gisten: bara http(s), aldrig javascript: o.d.
+const safeUrl = u => /^https?:\/\//i.test(String(u ?? "")) ? String(u) : "";
 const fmtDay = ts => new Date(ts*1000).toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" });
 function dayLabel(ts){
   const d = new Date(ts*1000); d.setHours(0,0,0,0);
@@ -667,7 +684,7 @@ function card(id, it){
   b.innerHTML = `<div class="pwrap">${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}${flag ? `<span class="flag">${flag}</span>` : ""}</div>
     <div class="t">${esc(s.title)}</div>
     <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
-    <div class="badges">${keys.length ? keys.map(k=>`<span class="b ${k}">${svcLabel(k)}</span>`).join("")
+    <div class="badges">${keys.length ? keys.map(k=>`<span class="b ${esc(k)}">${svcLabel(k)}</span>`).join("")
       : it.search ? `<span class="m">${it.pending ? "Kollar…" : "Inte på dina tjänster"}</span>` : ""}</div>`;
   if (it.search && !keys.length && !it.pending) b.classList.add("dim");
   b.onclick = () => { if (b._lp){ b._lp = false; return; } openDetail(id,it); };
@@ -751,8 +768,8 @@ async function loadExtras(s){
 function openDetail(id,it){
   const s = it.show, bd = backdrop(s), mk = markOf(id, it);
   const approx = it.approx || {};
-  const buttons = Object.keys(it.added).map(k=> it.links[k]
-    ? `<a class="${k}" href="${esc(it.links[k])}" target="_blank" rel="noopener">${approx[k] ? `Hitta på ${svcLabel(k)}` : `▶ Öppna i ${svcLabel(k)}`}</a>` : "").join("");
+  const buttons = Object.keys(it.added).map(k=> safeUrl(it.links[k])
+    ? `<a class="${esc(k)}" href="${esc(safeUrl(it.links[k]))}" target="_blank" rel="noopener">${approx[k] ? `Hitta på ${svcLabel(k)}` : `▶ Öppna i ${svcLabel(k)}`}</a>` : "").join("");
   const addedTxt = Object.entries(it.added).map(([k,ts])=>`${svcLabel(k)} ${new Date(ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"short"})}${approx[k]?" (premiär)":""}`).join(" · ");
   const extra = s.showType==="series" ? (s.seasonCount?` · ${s.seasonCount} säsonger`:"") : (s.runtime?` · ${s.runtime} min`:"");
   document.getElementById("detailBody").innerHTML = `
@@ -881,11 +898,12 @@ function tvButtons(it){
   const approx = it.approx || {}, several = Object.keys(it.added).length > 1;
   return Object.keys(it.added).map(k => {
     // Direktlänk finns (RapidAPI-läget), eller kan slås upp vid klick om RapidAPI-nyckel finns.
-    const canPlay = (!approx[k] && it.links[k]) || (cfg.saKey && it.show.tmdbId);
+    const direct = !approx[k] ? safeUrl(it.links[k]) : "";
+    const canPlay = direct || (cfg.saKey && it.show.tmdbId);
     if (!canPlay && !APP_HOME[k]) return "";
     const label = canPlay ? "📺 Spela på TV" + (several ? " ("+svcLabel(k)+")" : "") : "📺 Öppna "+svcLabel(k)+" på TV";
-    return `<a href="#" class="tv" data-svc="${k}" data-tmdb="${esc(it.show.tmdbId||"")}"
-      data-url="${esc(!approx[k] && it.links[k] ? it.links[k] : "")}">${label}</a>`;
+    return `<a href="#" class="tv" data-svc="${esc(k)}" data-tmdb="${esc(it.show.tmdbId||"")}"
+      data-url="${esc(direct)}">${label}</a>`;
   }).join("");
 }
 
@@ -921,7 +939,7 @@ document.addEventListener("click", async e => {
   try{
     if (!url && cfg.saKey && a.dataset.tmdb){
       toast("Hämtar länk…");
-      url = await lookupDirectLink(svc, a.dataset.tmdb).catch(()=>null);
+      url = safeUrl(await lookupDirectLink(svc, a.dataset.tmdb).catch(()=>null));
       if (!url) toast(`Hittade ingen direktlänk – öppnar ${svcLabel(svc)} i stället`);
     }
     url = url ? tvLink(svc, url) : APP_HOME[svc];
@@ -944,7 +962,11 @@ function renderTvSection(){
     <div id="tvFound"></div>
     <label for="tvIp">…eller ange TV:ns IP-adress</label>
     <div class="row"><input id="tvIp" inputmode="decimal" placeholder="t.ex. 192.168.1.50"><button id="tvIpGo">Välj</button></div>
-    <div id="tvPair"></div>`;
+    <div id="tvPair"></div>
+    ${TV.notifEnabled && !TV.notifEnabled() ? `<label>Notiser</label>
+    <p class="tip" style="margin-top:0">Notiser är avstängda för appen, så bevakningen kan inte säga till när något kommer.</p>
+    <div class="actions"><a href="#" id="notifOn">🔔 Slå på notiser</a></div>` : ""}`;
+  if ($("notifOn")) $("notifOn").onclick = e => { e.preventDefault(); TV.openNotifSettings(); };
   $("tvFind").onclick = e => { e.preventDefault();
     $("tvFound").innerHTML = `<p class="tip">Söker…</p>`;
     tvCall("discover").then(json => {
@@ -1200,13 +1222,13 @@ async function topList(svc, type, force=false){
   return daily(`top|${svc}|${type}|${cfg.saKey ? "sa" : ""}`, () => fetchTop(svc, type), force);
 }
 async function fetchTop(svc, type){
-  let res = null;
+  let res = null, saFailed = false;
   if (cfg.saKey && SA_TOP.includes(svc)){
     try{
       const r = await sa("/shows/top", { country:COUNTRY, service:svc, ...(type === "all" ? {} : { show_type:type }) });
       const shows = Array.isArray(r) ? r : (r.shows || []);
       if (shows.length) res = { t:Date.now(), src:"sa", items:shows.map(saItem) };
-    }catch(e){ console.warn("Topplista:", e); }
+    }catch(e){ console.warn("Topplista:", e); saFailed = true; }
     showUsage();
   }
   if (!res){
@@ -1229,7 +1251,8 @@ async function fetchTop(svc, type){
       it.pending = false; it.added[svc] = 0; it.approx[svc] = true;
       it.links[svc] = `https://www.themoviedb.org/${it.show.tmdbId}/watch?locale=SE`;
       return it; });
-    res = { t:Date.now(), src:"tmdb", items };
+    // Tjänstens egen topplista gick inte att hämta – försök igen om en stund i stället för i morgon.
+    res = { t:Date.now(), src:"tmdb", items, partial:saFailed };
   }
   return res;
 }
@@ -1439,7 +1462,7 @@ async function upcomingList(force=false){
   return daily(upKey(), fetchUpcoming, force);
 }
 async function fetchUpcoming(){
-  const items = [];
+  const items = []; let partial = false;
   if (cfg.saKey && mySa().length){
     for (const itemType of ["show", "season"]){
       try{
@@ -1449,7 +1472,7 @@ async function fetchUpcoming(){
           const show = r.shows?.[ch.showId]; if (!show) continue;
           items.push({ svc:ch.service?.id, ts:ch.timestamp || null, season:ch.season || null, link:ch.link || null, show:slim(show), src:"sa" });
         }
-      }catch(e){ if (!cfg.tmdbKey) throw e; console.warn("Kommande (SA):", e); }
+      }catch(e){ if (!cfg.tmdbKey) throw e; console.warn("Kommande (SA):", e); partial = true; }
     }
     showUsage();
   }
@@ -1460,7 +1483,7 @@ async function fetchUpcoming(){
     const have = new Set(items.map(x => x.show.tmdbId + "|" + (x.season || "") + "|" + x.svc));
     for (const x of res.flat()) if (!have.has(x.show.tmdbId + "|" + (x.season || "") + "|" + x.svc)) items.push(x);
   }
-  return { items };
+  return { items, partial };
 }
 function comeLabel(ts){
   if (!isFinite(ts)) return "Datum inte klart";
@@ -1496,7 +1519,8 @@ async function loadUpcoming(force=false){
         if (state.type !== "all" && x.show.showType !== state.type) continue;
         const id = x.show.tmdbId + "|" + (x.season || "");
         let it = byId.get(id);
-        if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, ts:x.ts, season:x.season, movie:x.movie }; byId.set(id, it); }
+        // notYet: titeln (inte en ny säsong) finns inte på tjänsten än – bevakningen ska säga till när den kommer.
+        if (!it){ it = { search:true, pending:false, added:{}, links:{}, approx:{}, show:x.show, ts:x.ts, season:x.season, movie:x.movie, notYet:!x.season }; byId.set(id, it); }
         it.added[x.svc] = 0;
         if (x.link) it.links[x.svc] = x.link;
         else if (!it.links[x.svc]){ it.links[x.svc] = `https://www.themoviedb.org/${x.show.tmdbId}`; it.approx[x.svc] = true; }
@@ -1701,7 +1725,7 @@ async function renderRatings(s, imdb){
 
 // ---------- Synk mellan enheter via en privat GitHub-gist ----------
 const GIST_FILE = "nytt-att-se.json";
-let syncTimer = null, syncBusy = false;
+let syncTimer = null, syncBusy = false, syncAgain = false;
 function setSyncStatus(t){ store.set("syncMsg", t); if ($("syncStatus")) $("syncStatus").textContent = t; }
 function queueSync(){ if (!cfg.ghToken) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 4000); }
 async function gh(path, opts={}){
@@ -1724,8 +1748,9 @@ async function findGist(){
   return null;
 }
 async function syncNow(){
-  if (!cfg.ghToken || syncBusy) return;
-  syncBusy = true; setSyncStatus("Synkar…");
+  if (!cfg.ghToken) return;
+  if (syncBusy){ syncAgain = true; return; }   // körs igen när den pågående synken är klar
+  syncBusy = true; syncAgain = false; setSyncStatus("Synkar…");
   try{
     let id = await findGist(), remote = {};
     if (id){
@@ -1754,7 +1779,10 @@ async function syncNow(){
     setSyncStatus("Synkad " + new Date().toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) + ".");
     if (localChanged){ render(); redrawOverlays(); exportWatch(); }
   }catch(e){ setSyncStatus("Synken misslyckades: " + e.message); }
-  finally{ syncBusy = false; }
+  finally{
+    syncBusy = false;
+    if (syncAgain){ syncAgain = false; queueSync(); }
+  }
 }
 
 // ---------- Ändringslogg (changelog.json) ----------
