@@ -63,6 +63,11 @@
   .markrow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
   .markrow a{padding:10px 4px !important;font-size:14px}
   .markrow a.on{background:var(--acc) !important;color:#111 !important;border-color:var(--acc) !important}
+  .thumbside{display:inline-block;transform:rotate(-90deg)}
+  .rate{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:14px 0 4px}
+  .rate a{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 4px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--fg,inherit);text-decoration:none;font-size:14px}
+  .rate a .ico{font-size:30px;line-height:1}
+  .rate a.on{background:var(--acc);color:#111;border-color:var(--acc)}
   .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}
   .sheet.open{display:flex}
   .panel{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--line);padding-bottom:calc(20px + env(safe-area-inset-bottom))}
@@ -223,7 +228,7 @@
     <a href="#" id="clearAlerts">Rensa alla</a>
     <a href="#" id="closeAlerts">Stäng</a>
   </div>
-  <p class="tip">Bevakningen säger till när något på Vill se dyker upp på dina tjänster eller snart försvinner, och när serier du sett eller vill se får en ny säsong.</p>
+  <p class="tip">Bevakningen säger till när något på Vill se dyker upp på dina tjänster eller snart försvinner, och när serier du sett eller vill se får en ny säsong (inte serier du gett 👎).</p>
 </div></div></div>
 
 <div class="sheet" id="filters"><div class="panel"><div class="pad">
@@ -246,6 +251,8 @@
 <div class="sheet" id="changelog"><div class="panel"><div class="pad" id="changelogBody"></div></div></div>
 
 <div class="sheet" id="detail"><div class="panel" id="detailBody"></div></div>
+
+<div class="sheet" id="rate"><div class="panel"><div class="pad" id="rateBody"></div></div></div>
 
 <div class="sheet" id="settings"><div class="panel"><div class="pad">
   <h2>Inställningar</h2>
@@ -391,6 +398,11 @@ if (!marks){   // flytta över gamla "dolda" titlar
 }
 const markKey = (id, it) => it.show.tmdbId || id;
 const markOf = (id, it) => (marks[markKey(id,it)] || marks[id] || {}).status || null;
+const ratingOf = (id, it) => (marks[markKey(id,it)] || marks[id] || {}).rating || null;
+const RATINGS = { up:{ icon:"👍", label:"Bra", txt:"👍" },
+                  mid:{ icon:'<span class="thumbside">👍</span>', label:"Sådär", txt:"sådär" },
+                  down:{ icon:"👎", label:"Inte bra", txt:"👎" } };
+const seenIcon = r => RATINGS[r]?.icon || "✓";
 function snapshot(it){
   const s = it.show;
   return { show:{ showType:s.showType, tmdbId:s.tmdbId, title:s.title, overview:s.overview,
@@ -398,13 +410,18 @@ function snapshot(it){
                   runtime:s.runtime, seasonCount:s.seasonCount },
            added:it.added, links:it.links, approx:it.approx, search:true };
 }
-function setMark(id, it, status){
-  const key = markKey(id, it);
+// rating (bara för "seen"): "up" 👍, "mid" tumme åt sidan, "down" 👎 eller null. Skickas rating med
+// sätts markeringen alltid (byter betyg) i stället för att ångras.
+function setMark(id, it, status, rating){
+  const key = markKey(id, it), prev = marks[key] || marks[id];
   if (id !== key) delete marks[id];
+  const force = rating !== undefined;
   // Ångrad markering sparas som { status:null } så att borttagningen också synkas till andra enheter.
-  if (!status || marks[key]?.status === status) marks[key] = { status:null, t:Date.now() };       // tryck igen = ångra
+  if (!status || (!force && prev?.status === status)) marks[key] = { status:null, t:Date.now() };       // tryck igen = ångra
   else{
     marks[key] = { status, t:Date.now(), item:snapshot(it) };
+    if (status === "seen" && rating) marks[key].rating = rating;
+    if (prev?.status === status && prev.seasons != null) marks[key].seasons = prev.seasons;   // behåll bevakningens säsongsräkning
     // En titel från Kommande som inte har kommit ut än: räkna den som inte tillgänglig någonstans,
     // så att bevakningen (även Android-notisen) säger till när den dyker upp.
     if (status === "want" && it.notYet && (!it.ts || it.ts > Date.now()/1000)) marks[key].svcs = [];
@@ -680,7 +697,7 @@ function card(id, it){
   const s = it.show, b = document.createElement("button"); b.className="item";
   const p = poster(s), keys = Object.keys(it.added);
   const mk = markOf(id, it);
-  const flag = mk === "want" ? "⭐" : mk === "seen" ? "✓" : mk === "hidden" ? "🗑" : "";
+  const flag = mk === "want" ? "⭐" : mk === "seen" ? seenIcon(ratingOf(id, it)) : mk === "hidden" ? "🗑" : "";
   b.innerHTML = `<div class="pwrap">${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}${flag ? `<span class="flag">${flag}</span>` : ""}</div>
     <div class="t">${esc(s.title)}</div>
     <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
@@ -719,7 +736,7 @@ function openQuick(id, it){
     <h2 style="font-size:17px">${esc(it.show.title)}</h2>
     <div class="actions">
       ${opt("want", mk==="want" ? "⭐ Ta bort från Vill se" : "⭐ Vill se")}
-      ${opt("seen", mk==="seen" ? "✓ Markera som osedd" : "✓ Sett")}
+      ${opt("seen", mk==="seen" ? seenIcon(ratingOf(id, it)) + " Sett – ändra betyg" : "✓ Sett")}
       ${opt("hidden", mk==="hidden" ? "🗑 Visa igen" : "🗑 Ta bort")}
       ${tvButtons(it).split("</a>")[0] ? tvButtons(it).split("</a>")[0] + "</a>" : ""}
       <a href="#" id="quickInfo">ℹ︎ Visa detaljer</a>
@@ -729,6 +746,7 @@ function openQuick(id, it){
   $("quickBody").querySelectorAll("[data-qmark]").forEach(a => a.onclick = e => {
     e.preventDefault();
     const m = a.dataset.qmark, wasOn = mk === m;
+    if (m === "seen"){ closeSheets(); askRating(id, it, () => { render(); redrawOverlays(); }); return; }
     setMark(id, it, m);
     toast(wasOn ? "Markeringen borttagen" : { want:"Sparad i Vill se ⭐", seen:"Markerad som sedd ✓", hidden:"Borttagen från listan" }[m]);
     closeSheets(); render();
@@ -737,6 +755,31 @@ function openQuick(id, it){
   $("quickInfo").onclick = e => { e.preventDefault(); closeSheets(); openDetail(id, it); };
   $("quickClose").onclick = e => { e.preventDefault(); closeSheets(); };
   $("quickBody").querySelector("a.tv")?.addEventListener("click", () => setTimeout(closeSheets, 50));
+}
+
+// ---------- Sett: välj betyg (👍 / tumme åt sidan / 👎) ----------
+function askRating(id, it, done){
+  const mk = markOf(id, it), cur = mk === "seen" ? ratingOf(id, it) : null;
+  $("rateBody").innerHTML = `
+    <h2 style="font-size:17px">${esc(it.show.title)}</h2>
+    <p class="m">Vad tyckte du? Betyget styr vad du får under ✨ För dig.</p>
+    <div class="rate">${Object.entries(RATINGS).map(([k, r]) =>
+      `<a href="#" data-rate="${k}" class="${cur===k?"on":""}"><span class="ico">${r.icon}</span>${r.label}</a>`).join("")}</div>
+    <div class="actions">
+      ${mk === "seen" ? `<a href="#" id="rateUnseen">Markera som osedd</a>` : `<a href="#" data-rate="">✓ Sett, inget betyg</a>`}
+      <a href="#" id="rateClose">Avbryt</a>
+    </div>`;
+  $("rate").classList.add("open");
+  $("rateBody").querySelectorAll("[data-rate]").forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const r = a.dataset.rate || null;
+    setMark(id, it, "seen", r);
+    toast(r ? `Sedd – ${RATINGS[r].txt}` : "Markerad som sedd ✓");
+    closeSheets(); done && done();
+  });
+  if ($("rateUnseen")) $("rateUnseen").onclick = e => { e.preventDefault(); setMark(id, it, null);
+    toast("Markeringen borttagen"); closeSheets(); done && done(); };
+  $("rateClose").onclick = e => { e.preventDefault(); $("rate").classList.remove("open"); };
 }
 
 // Extra info till detaljvyn: svensk beskrivning, skådespelare, regissör/skapare och trailer.
@@ -790,7 +833,7 @@ function openDetail(id,it){
         ${buttons}
         <div class="markrow">
           <a href="#" data-mark="want" class="${mk==="want"?"on":""}">⭐ Vill se</a>
-          <a href="#" data-mark="seen" class="${mk==="seen"?"on":""}">✓ Sett</a>
+          <a href="#" data-mark="seen" class="${mk==="seen"?"on":""}">${mk==="seen" ? seenIcon(ratingOf(id, it)) : "✓"} Sett</a>
           <a href="#" data-mark="hidden" class="${mk==="hidden"?"on":""}">🗑 Ta bort</a>
         </div>
         <a href="#" id="closeDetail">Stäng</a>
@@ -807,6 +850,7 @@ function openDetail(id,it){
   document.querySelectorAll("#detailBody [data-mark]").forEach(a => a.onclick = e => {
     e.preventDefault();
     const wasOn = a.classList.contains("on");
+    if (a.dataset.mark === "seen"){ askRating(id, it, () => { render(); redrawOverlays(); }); return; }
     setMark(id, it, a.dataset.mark);
     document.querySelectorAll("#detailBody [data-mark]").forEach(x => x.classList.toggle("on", x === a && !wasOn));
     toast(wasOn ? "Markeringen borttagen" : { want:"Sparad i Vill se ⭐", seen:"Markerad som sedd ✓", hidden:"Borttagen från listan" }[a.dataset.mark]);
@@ -1594,7 +1638,7 @@ async function runWatch(force=false){
   let changed = false, fresh = 0;
   try{
     const entries = Object.entries(marks).filter(([,m]) => m.item?.show?.tmdbId &&
-      (m.status === "want" || (m.status === "seen" && m.item.show.showType === "series")));
+      (m.status === "want" || (m.status === "seen" && m.rating !== "down" && m.item.show.showType === "series")));
     for (let i = 0; i < entries.length; i += 8) await Promise.all(entries.slice(i, i+8).map(async ([key, m]) => {
       const s = m.item.show;
       try{
@@ -1645,7 +1689,7 @@ function exportWatch(){
   for (const m of Object.values(marks)){
     const s = m.item?.show; if (!s?.tmdbId) continue;
     if (m.status === "want") want.push({ id:s.tmdbId, title:s.title, svcs:m.svcs || Object.keys(m.item.added || {}) });
-    if ((m.status === "want" || m.status === "seen") && s.showType === "series" && s.tmdbId.startsWith("tv/") && m.seasons != null)
+    if ((m.status === "want" || (m.status === "seen" && m.rating !== "down")) && s.showType === "series" && s.tmdbId.startsWith("tv/") && m.seasons != null)
       series.push({ id:s.tmdbId, title:s.title, seasons:m.seasons });
   }
   try{ TV.setWatch(JSON.stringify({ key:cfg.tmdbKey, services:mine().map(s => ({ key:s.key, label:s.label, pattern:s.match.source })), want, series })); }
@@ -1657,30 +1701,35 @@ let forYouBusy = false;
 async function renderForYou(){
   const el = $("forYou"); if (!el) return;
   if (!cfg.tmdbKey){ el.innerHTML = ""; return; }
-  const base = Object.values(marks).filter(m => (m.status === "want" || m.status === "seen") && m.item?.show?.tmdbId)
-    .sort((a,b) => b.t - a.t).slice(0, 8);
+  // Bas: det du vill se och det du sett och inte gillade sämre än 👍/sådär. 👎-titlar drar ner liknande titlar.
+  const recent = Object.values(marks).filter(m => (m.status === "want" || m.status === "seen") && m.item?.show?.tmdbId)
+    .sort((a,b) => b.t - a.t);
+  const base = recent.filter(m => m.rating !== "down").slice(0, 8);
+  const neg = recent.filter(m => m.rating === "down").slice(0, 6);
   if (!base.length){ el.innerHTML = ""; return; }
-  const sig = base.map(m => m.item.show.tmdbId).join(",") + "|" + cfg.services.join(",");
+  const weight = m => m.status === "want" ? 1.2 : ({ up:1.6, mid:0.5, down:-1 })[m.rating] ?? 1;
+  const sig = [...base, ...neg].map(m => m.item.show.tmdbId + ":" + (m.rating || "")).join(",") + "|" + cfg.services.join(",");
   let c = store.get("forYou", null);
   if (!c || c.sig !== sig || Date.now() - c.t > 12*36e5){
     if (forYouBusy) return;
     forYouBusy = true;
     try{
       const score = new Map();
-      await Promise.all(base.map(async (m, bi) => {
+      await Promise.all([...base, ...neg].map(async (m, bi) => {
+        if (m.rating === "down") bi = 0;   // 👎 räknas fullt oavsett ålder
         const id = m.item.show.tmdbId, type = id.startsWith("movie/") ? "movie" : "tv";
         try{
           const r = await tmdbGet(`/${id}/recommendations`, { language:"sv-SE" });
           (r.results || []).slice(0, 12).forEach((x, i) => {
             if (!x.poster_path) return;
             const k = type+"/"+x.id, e = score.get(k) || { x, type, s:0 };
-            e.s += (m.status === "want" ? 1.2 : 1) * (1 - i/24) * (1 - bi/16);
+            e.s += weight(m) * (1 - i/24) * (1 - bi/16);
             score.set(k, e);
           });
         }catch{}
       }));
       const marked = new Set(Object.entries(marks).filter(([,m]) => m.status).map(([k]) => k));
-      const cands = [...score.entries()].filter(([k]) => !marked.has(k)).sort((a,b) => b[1].s - a[1].s)
+      const cands = [...score.entries()].filter(([k, e]) => !marked.has(k) && e.s > 0).sort((a,b) => b[1].s - a[1].s)
         .slice(0, 40).map(([,e]) => searchItem(e.x, e.type));
       await fillServices(cands);
       c = { t:Date.now(), sig, items:cands.filter(it => Object.keys(it.added).length).slice(0, 15) };

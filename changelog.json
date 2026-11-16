@@ -1,6 +1,16 @@
 [
   {
     "date": "2026-11-16",
+    "title": "Betygsätt det du sett",
+    "changes": [
+      "När du trycker ✓ Sett får du välja 👍 Bra, tumme åt sidan (Sådär) eller 👎 Inte bra. Du kan också markera som sedd utan betyg.",
+      "Betyget syns på titelns bild, och du kan ändra det eller markera titeln som osedd genom att trycka på Sett igen.",
+      "✨ För dig tar hänsyn till betygen: titlar som liknar det du gett 👍 hamnar högre, och sådant som liknar det du gett 👎 trycks ner.",
+      "Serier du gett 👎 bevakas inte längre för nya säsonger."
+    ]
+  },
+  {
+    "date": "2026-11-16",
     "title": "Buggrättningar",
     "changes": [
       "Bevakningen säger nu till när en titel du ⭐-märkt i Kommande kommer ut på din tjänst.",

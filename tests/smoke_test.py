@@ -183,6 +183,25 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
         added:{ netflix:0 }, links:{}, approx:{}, notYet:true, ts:Date.now()/1000 + 86400 }, 'want'); return marks['movie/990'].svcs; }""")
     check(svcs == [], f"Vill se från Kommande bevakas tills titeln kommer ({svcs})")
 
+    # Sett med betyg: 👍/sådär/👎 sparas, visas på kortet, och 👎 ger ingen säsongsbevakning.
+    pg.evaluate("closeSheets()")
+    pg.evaluate("""() => openDetail('tmdb:movie/702', { show:{ showType:'movie', tmdbId:'movie/702', title:'Betygsatt', imageSet:{} }, added:{}, links:{}, approx:{}, search:true })""")
+    pg.wait_for_timeout(300)
+    pg.click("#detailBody [data-mark='seen']"); pg.wait_for_timeout(200)
+    check(pg.locator("#rate.open [data-rate]").count() == 4, "Sett öppnar betygsvalet (3 tummar + utan betyg)")
+    pg.click("#rate [data-rate='up']"); pg.wait_for_timeout(200)
+    check(pg.evaluate("marks['movie/702'].status === 'seen' && marks['movie/702'].rating === 'up'"), "👍 sparas på titeln")
+    check(pg.evaluate("card('tmdb:movie/702', marks['movie/702'].item).querySelector('.flag').textContent") == "👍", "kortet visar 👍")
+    pg.evaluate("askRating('tmdb:movie/702', marks['movie/702'].item, () => {})"); pg.wait_for_timeout(100)
+    check(pg.locator("#rate [data-rate='up'].on").count() == 1 and pg.locator("#rateUnseen").count() == 1, "betygsvalet visar nuvarande betyg och Markera som osedd")
+    pg.click("#rate [data-rate='mid']"); pg.wait_for_timeout(100)
+    check(pg.evaluate("marks['movie/702'].status === 'seen' && marks['movie/702'].rating === 'mid'"), "byta betyg ångrar inte markeringen")
+    pg.evaluate("askRating('tmdb:movie/702', marks['movie/702'].item, () => {})"); pg.click("#rateUnseen"); pg.wait_for_timeout(100)
+    check(pg.evaluate("marks['movie/702'].status === null"), "Markera som osedd tar bort markeringen")
+    pg.evaluate("setMark('x', { show:{ showType:'series', tmdbId:'tv/801', title:'Dålig serie', imageSet:{} }, added:{}, links:{} }, 'seen', 'down'); marks['tv/801'].seasons = 1")
+    pg.evaluate("watchBusy = false; runWatch(true)"); pg.wait_for_timeout(1500)
+    check("/tv/801" not in calls and "/tv/800" in calls, "👎-serie bevakas inte för nya säsonger (sedd serie utan betyg gör det)")
+
     # En ändring under pågående synk körs när synken är klar.
     check(pg.evaluate("() => { syncBusy = true; syncNow(); const r = syncAgain; syncBusy = false; syncAgain = false; return r; }"),
           "ändring under pågående synk köas")
