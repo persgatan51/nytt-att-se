@@ -19,6 +19,7 @@ def sa_show(i, t="movie"):
             "releaseYear":2024,"rating":80,"imageSet":{"verticalPoster":{"w360":"https://image.tmdb.org/p.jpg"}},
             "streamingOptions":{"se":[{"service":{"id":"netflix"},"type":"subscription","link":f"https://www.netflix.com/title/{i}"}]}}
 gist = {"content": None}
+HH_CODE = "abcdef0123456789abcdef0123456789"
 calls = []
 
 def tmdb(route):
@@ -38,7 +39,9 @@ def tmdb(route):
     elif path.startswith("/search/company"): body={"results":[{"id":178464,"name":"Netflix"}]}
     elif path.endswith("/watch/providers"):
         n=int(path.split("/")[2]); body={"results":{"SE":{"flatrate":[{"provider_name":"Netflix" if n%2==0 else "Okänd"}]}}}
-    elif path.endswith("/recommendations"): body={"results":[mk(i) for i in range(400,412)]}
+    elif path.endswith("/recommendations"):
+        n=int(path.split("/")[2]); start = 420 if n == 703 else 400   # 703 ger egna förslag ("Eftersom du gillade")
+        body={"results":[mk(i) for i in range(start,start+12)]}
     elif re.match(r"^/tv/\d+$", path):
         fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*20))
         body={"overview":"Svensk","next_episode_to_air":{"episode_number":1,"season_number":4,"air_date":fut},"last_episode_to_air":{"season_number":3},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
@@ -76,7 +79,12 @@ def github(route):
     r = route.request; m = r.method
     if m == "OPTIONS": return route.fulfill(status=204, headers={"access-control-allow-origin":"*","access-control-allow-headers":"*","access-control-allow-methods":"*"})
     h={"access-control-allow-origin":"*"}
-    if r.url.endswith("/gists?per_page=100&page=1"): body=[{"id":"g1","files":{"nytt-att-se.json":{}}}] if gist["content"] else []
+    if HH_CODE in r.url:
+        body={"files":{"nytt-att-se.json":{"truncated":False,"content":json.dumps({"v":1,"marks":{
+            "movie/705":{"status":"want","t":5,"item":{"show":{"showType":"movie","tmdbId":"movie/705","title":"Båda vill se","imageSet":{}},"added":{},"links":{}}},
+            "movie/706":{"status":"want","t":6,"item":{"show":{"showType":"movie","tmdbId":"movie/706","title":"Anna vill se","imageSet":{}},"added":{},"links":{}}},
+            "movie/707":{"status":"seen","rating":"down","t":7,"item":{"show":{"showType":"movie","tmdbId":"movie/707","title":"Anna har sett","imageSet":{}},"added":{},"links":{}}}}})}}}
+    elif r.url.endswith("/gists?per_page=100&page=1"): body=[{"id":"g1","files":{"nytt-att-se.json":{}}}] if gist["content"] else []
     elif m == "POST" or m == "PATCH":
         gist["content"] = json.loads(r.post_data)["files"]["nytt-att-se.json"]["content"]; body={"id":"g1"}
     else: body={"files":{"nytt-att-se.json":{"content":gist["content"],"truncated":False}}}
@@ -191,11 +199,16 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check(pg.locator("#rate.open [data-rate]").count() == 4, "Sett öppnar betygsvalet (3 tummar + utan betyg)")
     pg.click("#rate [data-rate='up']"); pg.wait_for_timeout(200)
     check(pg.evaluate("marks['movie/702'].status === 'seen' && marks['movie/702'].rating === 'up'"), "👍 sparas på titeln")
+    check(pg.locator("#detail.open").count() == 1 and pg.locator("#rate.open").count() == 0
+          and "👍" in pg.locator("#detailBody [data-mark='seen'].on").inner_text(), "detaljvyn ligger kvar efter betyget och visar 👍")
     check(pg.evaluate("card('tmdb:movie/702', marks['movie/702'].item).querySelector('.flag').textContent") == "👍", "kortet visar 👍")
     pg.evaluate("askRating('tmdb:movie/702', marks['movie/702'].item, () => {})"); pg.wait_for_timeout(100)
     check(pg.locator("#rate [data-rate='up'].on").count() == 1 and pg.locator("#rateUnseen").count() == 1, "betygsvalet visar nuvarande betyg och Markera som osedd")
     pg.click("#rate [data-rate='mid']"); pg.wait_for_timeout(100)
     check(pg.evaluate("marks['movie/702'].status === 'seen' && marks['movie/702'].rating === 'mid'"), "byta betyg ångrar inte markeringen")
+    pg.evaluate("askRating('tmdb:movie/702', marks['movie/702'].item, () => {})"); pg.wait_for_timeout(100)
+    pg.click("#rate [data-rate='']"); pg.wait_for_timeout(100)
+    check(pg.evaluate("marks['movie/702'].status === 'seen' && !marks['movie/702'].rating"), "Ta bort betyget behåller Sett")
     pg.evaluate("askRating('tmdb:movie/702', marks['movie/702'].item, () => {})"); pg.click("#rateUnseen"); pg.wait_for_timeout(100)
     check(pg.evaluate("marks['movie/702'].status === null"), "Markera som osedd tar bort markeringen")
     pg.evaluate("setMark('x', { show:{ showType:'series', tmdbId:'tv/801', title:'Dålig serie', imageSet:{} }, added:{}, links:{} }, 'seen', 'down'); marks['tv/801'].seasons = 1")
@@ -205,6 +218,71 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     # En ändring under pågående synk körs när synken är klar.
     check(pg.evaluate("() => { syncBusy = true; syncNow(); const r = syncAgain; syncBusy = false; syncAgain = false; return r; }"),
           "ändring under pågående synk köas")
+    # Bakåt/Escape stänger bara den översta rutan.
+    pg.evaluate("closeSheets()")
+    pg.evaluate("""() => { const it = { show:{ showType:'movie', tmdbId:'movie/704', title:'Stapel', imageSet:{} }, added:{}, links:{}, approx:{}, search:true };
+        openDetail('tmdb:movie/704', it); askRating('tmdb:movie/704', it, () => {}); }""")
+    pg.wait_for_timeout(100)
+    pg.evaluate("__tvBack()"); pg.wait_for_timeout(50)
+    check(pg.locator("#rate.open").count() == 0 and pg.locator("#detail.open").count() == 1, "bakåt stänger bara betygsrutan, inte detaljvyn")
+    check(pg.locator("#detail .panel[role='dialog'][aria-modal='true']").count() == 1, "rutorna är dialoger för skärmläsare")
+    pg.keyboard.press("Escape"); pg.wait_for_timeout(50)
+    check(pg.locator(".sheet.open").count() == 0, "Escape stänger detaljvyn")
+
+    # Okända betyg från gisten ignoreras.
+    gist["content"] = json.dumps({"v":1,"marks":{"movie/708":{"status":"seen","rating":"toString","t":9e12,
+        "item":{"show":{"showType":"movie","tmdbId":"movie/708","title":"Konstigt betyg","imageSet":{}},"added":{},"links":{}}}}})
+    pg.evaluate("syncNow()"); pg.wait_for_timeout(800)
+    check(pg.evaluate("marks['movie/708'] && marks['movie/708'].status === 'seen' && !('rating' in marks['movie/708']) && seenIcon('toString') === '✓'"),
+          "okänt betyg från gisten tas bort")
+    pg.evaluate("countCall()")
+    check(pg.evaluate("JSON.parse(localStorage.usage).day === dayKey()"), "RapidAPI-anrop räknas per svenskt dygn")
+
+    # För dig: nytt betyg räknas om utan nya rekommendationsanrop, och 👍 ger en egen rad.
+    pg.evaluate("closeSheets(); showTab('new')")
+    pg.evaluate("setMark('x', { show:{ showType:'movie', tmdbId:'movie/703', title:'Gillad film', imageSet:{} }, added:{}, links:{} }, 'seen', 'up')")
+    pg.evaluate("renderForYou()"); pg.wait_for_timeout(1500)
+    heads = pg.locator("#forYou h3").all_inner_texts()
+    check("Eftersom du gillade Gillad film" in heads, f"rad Eftersom du gillade ({heads})")
+    rc = sum(1 for c in calls if c.endswith("/recommendations"))
+    pg.evaluate("setMark('x', marks['movie/703'].item, 'seen', 'mid')"); pg.evaluate("renderForYou()"); pg.wait_for_timeout(1000)
+    rc2 = sum(1 for c in calls if c.endswith("/recommendations"))
+    check(rc2 == rc and "Eftersom du gillade Gillad film" not in pg.locator("#forYou h3").all_inner_texts(),
+          f"ändrat betyg hämtar inga nya rekommendationer ({rc} → {rc2})")
+
+    # Såg du klart? efter TV-start.
+    pg.evaluate("""() => localStorage.setItem('lastPlayed', JSON.stringify({ id:'movie/709', t:Date.now() - 2*36e5, n:0,
+        item:{ show:{ showType:'movie', tmdbId:'movie/709', title:'Startad film', imageSet:{} }, added:{ netflix:0 }, links:{} } }))""")
+    check(pg.evaluate("askWatched()") and "Såg du klart Startad film" in pg.locator("#rateBody h2").inner_text()
+          and pg.locator("#rateLater").count() == 1, "frågar Såg du klart? efter TV-start")
+    check(pg.evaluate("!askWatched()"), "frågar inte igen direkt")
+    pg.click("#rate [data-rate='up']"); pg.wait_for_timeout(100)
+    check(pg.evaluate("marks['movie/709'].rating === 'up' && localStorage.lastPlayed === 'null'"), "svaret sparas som betyg och frågan försvinner")
+
+    # Hushållet: det ni båda vill se.
+    pg.evaluate(f"""() => {{ setMark('x', {{ show:{{ showType:'movie', tmdbId:'movie/705', title:'Båda vill se', imageSet:{{}} }}, added:{{}}, links:{{}} }}, 'want');
+        household = [{{ name:'Anna', code:'{HH_CODE}' }}]; saveHousehold(); }}""")
+    pg.click("[data-tab='lists']"); pg.click("#listTabs [data-list='together']"); pg.wait_for_timeout(800)
+    txt = pg.locator("#listGrid").inner_text()
+    check("Vill ni båda se" in txt and "Båda vill se" in txt and "Du + Anna" in txt and "Anna vill se" in txt and "Anna har sett" not in txt,
+          "Tillsammans visar det ni båda vill se")
+    pg.evaluate("closeSheets()"); pg.click("#btnSettings"); pg.wait_for_timeout(100)
+    pg.fill("#hhName", "Bo"); pg.fill("#hhCodeIn", "https://gist.github.com/bo/0123456789abcdef0123456789abcdef"); pg.click("#hhAdd")
+    check(pg.evaluate("household.length === 2 && household[1].code === '0123456789abcdef0123456789abcdef'") and "Bo" in pg.locator("#hhList").inner_text(),
+          "lägga till i hushållet med gist-länk")
+    pg.evaluate("closeSheets()")
+
+    # TV-start sparar vad som startades (med påhittad TvBridge).
+    tv = ctx.new_page(); tv.on("pageerror", lambda e: errs.append("JS: "+str(e)))
+    tv.add_init_script("""window.TvBridge = { getTv:() => JSON.stringify({ paired:true, host:'1.2.3.4' }),
+        launch:(u, id) => setTimeout(() => { window.__launched = u; window.__tvCb(id, true, ''); }, 10),
+        setWatch:() => {}, checkWatchNow:() => {}, notifEnabled:() => true };""")
+    tv.goto(INDEX); tv.wait_for_timeout(1500)
+    tv.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/710', title:'På TV', imageSet:{} },
+        added:{ netflix:0 }, links:{ netflix:'https://www.netflix.com/title/710' }, approx:{} })""")
+    tv.click("#detailBody a.tv"); tv.wait_for_timeout(300)
+    check(tv.evaluate("window.__launched") == "https://www.netflix.com/title/710?source=30"
+          and tv.evaluate("JSON.parse(localStorage.lastPlayed).id") == "movie/710", "Spela på TV sparar titeln för Såg du klart?")
     b.close()
 
 print("JS-fel:" , [e for e in errs if e.startswith("JS")])

@@ -68,6 +68,12 @@
   .rate a{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 4px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--fg,inherit);text-decoration:none;font-size:14px}
   .rate a .ico{font-size:30px;line-height:1}
   .rate a.on{background:var(--acc);color:#111;border-color:var(--acc)}
+  .panel:focus{outline:none}
+  .grid h3.sec{grid-column:1/-1;margin:14px 0 0;text-transform:none}
+  .grid h3.sec:first-child{margin-top:0}
+  .who{font-size:11px;color:var(--acc);margin-top:2px}
+  .hhrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+  .hhrow span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}
   .sheet.open{display:flex}
   .panel{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--line);padding-bottom:calc(20px + env(safe-area-inset-bottom))}
@@ -144,6 +150,7 @@
       <button data-list="want">⭐ Vill se</button>
       <button data-list="seen">✓ Sett</button>
       <button data-list="hidden">🗑 Borttagna</button>
+      <button data-list="together" style="display:none">👥 Tillsammans</button>
     </div>
   </div>
   <div id="searchBar" class="row" style="display:none;padding-top:8px">
@@ -281,6 +288,8 @@
     <a href="#" id="syncNowBtn">🔄 Synka nu</a>
     <a href="#" id="watchNowBtn">🔔 Kolla bevakningen nu</a>
   </div>
+  <label>👥 Hushållet</label>
+  <div id="hhSection"></div>
   <p class="tip">Nycklarna sparas bara i den här webbläsaren.</p>
   <label>Mina streamingtjänster</label>
   <div id="serviceBoxes"></div>
@@ -351,6 +360,12 @@ const bigCache = (() => {
     },
     peek: k => mem.get(k) ?? null,                  // synkron läsning av det som redan laddats
     async set(k, v){ mem.set(k, v); try{ await tx("readwrite", st => st.put(v, k)); }catch(e){ console.warn("Cache:", e); } },
+    // Tar bort poster där drop(nyckel, värde) är sant (t.ex. gamla rekommendationer och tjänstuppslag).
+    async prune(drop){
+      try{ await tx("readwrite", st => { const r = st.openCursor();
+        r.onsuccess = () => { const c = r.result; if (!c) return; if (drop(String(c.key), c.value)){ c.delete(); mem.delete(c.key); } c.continue(); };
+        return null; }); }catch{}
+    },
   };
 })();
 const dayKey = () => new Date().toLocaleDateString("sv-SE");
@@ -398,11 +413,15 @@ if (!marks){   // flytta över gamla "dolda" titlar
 }
 const markKey = (id, it) => it.show.tmdbId || id;
 const markOf = (id, it) => (marks[markKey(id,it)] || marks[id] || {}).status || null;
-const ratingOf = (id, it) => (marks[markKey(id,it)] || marks[id] || {}).rating || null;
 const RATINGS = { up:{ icon:"👍", label:"Bra", txt:"👍" },
-                  mid:{ icon:'<span class="thumbside">👍</span>', label:"Sådär", txt:"sådär" },
+                  mid:{ icon:'<span class="thumbside" role="img" aria-label="Sådär">👍</span>', label:"Sådär", txt:"sådär" },
                   down:{ icon:"👎", label:"Inte bra", txt:"👎" } };
-const seenIcon = r => RATINGS[r]?.icon || "✓";
+// Betyg kan komma från den synkade gisten – bara kända värden räknas.
+const validRating = r => typeof r === "string" && Object.hasOwn(RATINGS, r) ? r : null;
+const ratingOf = (id, it) => validRating((marks[markKey(id,it)] || marks[id] || {}).rating);
+const seenIcon = r => RATINGS[validRating(r)]?.icon || "✓";
+const markLabel = (mk, r) => mk === "want" ? "Vill se" : mk === "hidden" ? "Borttagen"
+  : mk === "seen" ? "Sett" + (validRating(r) ? " – " + RATINGS[r].label : "") : "";
 function snapshot(it){
   const s = it.show;
   return { show:{ showType:s.showType, tmdbId:s.tmdbId, title:s.title, overview:s.overview,
@@ -420,7 +439,7 @@ function setMark(id, it, status, rating){
   if (!status || (!force && prev?.status === status)) marks[key] = { status:null, t:Date.now() };       // tryck igen = ångra
   else{
     marks[key] = { status, t:Date.now(), item:snapshot(it) };
-    if (status === "seen" && rating) marks[key].rating = rating;
+    if (status === "seen" && validRating(rating)) marks[key].rating = rating;
     if (prev?.status === status && prev.seasons != null) marks[key].seasons = prev.seasons;   // behåll bevakningens säsongsräkning
     // En titel från Kommande som inte har kommit ut än: räkna den som inte tillgänglig någonstans,
     // så att bevakningen (även Android-notisen) säger till när den dyker upp.
@@ -434,14 +453,15 @@ let state = { tab:"new", type:"all", svc:new Set(cfg.services), showHidden:false
               shows:new Map(), cursor:null, hasMore:false };
 
 // ---------- Streaming Availability API ----------
+// Räknas per svenskt dygn (samma som dagslistorna), inte per UTC-dygn.
 function countCall(){
-  const today = new Date().toISOString().slice(0,10);
+  const today = dayKey();
   const u = store.get("usage",{ day:today, n:0 });
   if (u.day !== today){ u.day = today; u.n = 0; }
   u.n++; store.set("usage",u);
 }
 function showUsage(){
-  const u = store.get("usage",null), today = new Date().toISOString().slice(0,10);
+  const u = store.get("usage",null), today = dayKey();
   const n = u && u.day===today ? u.n : 0;
   document.getElementById("usage").textContent = cfg.source==="tmdb"
     ? `Källa: bara TMDB · ${n} RapidAPI-anrop idag`
@@ -698,7 +718,7 @@ function card(id, it){
   const p = poster(s), keys = Object.keys(it.added);
   const mk = markOf(id, it);
   const flag = mk === "want" ? "⭐" : mk === "seen" ? seenIcon(ratingOf(id, it)) : mk === "hidden" ? "🗑" : "";
-  b.innerHTML = `<div class="pwrap">${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}${flag ? `<span class="flag">${flag}</span>` : ""}</div>
+  b.innerHTML = `<div class="pwrap">${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}${flag ? `<span class="flag" role="img" aria-label="${esc(markLabel(mk, ratingOf(id, it)))}">${flag}</span>` : ""}</div>
     <div class="t">${esc(s.title)}</div>
     <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
     <div class="badges">${keys.length ? keys.map(k=>`<span class="b ${esc(k)}">${svcLabel(k)}</span>`).join("")
@@ -758,28 +778,44 @@ function openQuick(id, it){
 }
 
 // ---------- Sett: välj betyg (👍 / tumme åt sidan / 👎) ----------
-function askRating(id, it, done){
-  const mk = markOf(id, it), cur = mk === "seen" ? ratingOf(id, it) : null;
+// Stänger bara betygsrutan, så att t.ex. detaljvyn bakom ligger kvar.
+// opts.ask: frågan "Såg du klart?" efter att titeln startats på TV:n (med Inte än / Fråga inte).
+function askRating(id, it, done, opts={}){
+  const mk = markOf(id, it), cur = mk === "seen" ? ratingOf(id, it) : null, title = esc(it.show.title);
+  const close = () => $("rate").classList.remove("open");
   $("rateBody").innerHTML = `
-    <h2 style="font-size:17px">${esc(it.show.title)}</h2>
-    <p class="m">Vad tyckte du? Betyget styr vad du får under ✨ För dig.</p>
+    <h2 style="font-size:17px">${opts.ask ? (it.show.showType === "series" ? `Har du sett klart ${title}?` : `Såg du klart ${title}?`) : title}</h2>
+    <p class="m">${opts.ask ? "Du startade den på TV:n. Vad tyckte du?" : "Vad tyckte du?"} Betyget styr vad du får under ✨ För dig.</p>
     <div class="rate">${Object.entries(RATINGS).map(([k, r]) =>
-      `<a href="#" data-rate="${k}" class="${cur===k?"on":""}"><span class="ico">${r.icon}</span>${r.label}</a>`).join("")}</div>
+      `<a href="#" data-rate="${k}" class="${cur===k?"on":""}"><span class="ico" aria-hidden="true">${r.icon}</span>${r.label}</a>`).join("")}</div>
     <div class="actions">
-      ${mk === "seen" ? `<a href="#" id="rateUnseen">Markera som osedd</a>` : `<a href="#" data-rate="">✓ Sett, inget betyg</a>`}
-      <a href="#" id="rateClose">Avbryt</a>
+      ${mk === "seen" ? `${cur ? `<a href="#" data-rate="">Ta bort betyget</a>` : ""}<a href="#" id="rateUnseen">Markera som osedd</a>`
+                      : `<a href="#" data-rate="">✓ Sett, inget betyg</a>`}
+      ${opts.ask ? `<a href="#" id="rateLater">Inte än – fråga senare</a><a href="#" id="rateNever">Fråga inte om den här</a>`
+                 : `<a href="#" id="rateClose">Avbryt</a>`}
     </div>`;
   $("rate").classList.add("open");
   $("rateBody").querySelectorAll("[data-rate]").forEach(a => a.onclick = e => {
     e.preventDefault();
     const r = a.dataset.rate || null;
     setMark(id, it, "seen", r);
-    toast(r ? `Sedd – ${RATINGS[r].txt}` : "Markerad som sedd ✓");
-    closeSheets(); done && done();
+    toast(r ? `Sedd – ${RATINGS[r].txt}` : cur ? "Betyget borttaget" : "Markerad som sedd ✓");
+    close(); opts.onRated && opts.onRated(); done && done();
   });
   if ($("rateUnseen")) $("rateUnseen").onclick = e => { e.preventDefault(); setMark(id, it, null);
-    toast("Markeringen borttagen"); closeSheets(); done && done(); };
-  $("rateClose").onclick = e => { e.preventDefault(); $("rate").classList.remove("open"); };
+    toast("Markeringen borttagen"); close(); done && done(); };
+  if ($("rateClose")) $("rateClose").onclick = e => { e.preventDefault(); close(); };
+  if ($("rateLater")) $("rateLater").onclick = e => { e.preventDefault(); close(); opts.onLater && opts.onLater(); };
+  if ($("rateNever")) $("rateNever").onclick = e => { e.preventDefault(); close(); opts.onNever && opts.onNever(); };
+}
+
+// Uppdaterar ⭐/Sett/🗑-raden i en öppen detaljvy efter en ändring.
+function syncDetailMarks(id, it){
+  const mk = markOf(id, it);
+  document.querySelectorAll("#detailBody [data-mark]").forEach(x => {
+    x.classList.toggle("on", x.dataset.mark === mk);
+    if (x.dataset.mark === "seen") x.innerHTML = `${mk === "seen" ? seenIcon(ratingOf(id, it)) : "✓"} Sett`;
+  });
 }
 
 // Extra info till detaljvyn: svensk beskrivning, skådespelare, regissör/skapare och trailer.
@@ -850,9 +886,9 @@ function openDetail(id,it){
   document.querySelectorAll("#detailBody [data-mark]").forEach(a => a.onclick = e => {
     e.preventDefault();
     const wasOn = a.classList.contains("on");
-    if (a.dataset.mark === "seen"){ askRating(id, it, () => { render(); redrawOverlays(); }); return; }
+    if (a.dataset.mark === "seen"){ askRating(id, it, () => { syncDetailMarks(id, it); render(); redrawOverlays(); }); return; }
     setMark(id, it, a.dataset.mark);
-    document.querySelectorAll("#detailBody [data-mark]").forEach(x => x.classList.toggle("on", x === a && !wasOn));
+    syncDetailMarks(id, it);
     toast(wasOn ? "Markeringen borttagen" : { want:"Sparad i Vill se ⭐", seen:"Markerad som sedd ✓", hidden:"Borttagen från listan" }[a.dataset.mark]);
     render();
     redrawOverlays();
@@ -913,7 +949,7 @@ const TV = window.TvBridge || null;
 const tvCbs = {};
 window.__tvCb = (id, ok, data) => { const f = tvCbs[id]; delete tvCbs[id]; f && f(ok, data); };
 window.__tvBack = () => {
-  if (document.querySelector(".sheet.open")){ closeSheets(); return true; }
+  if (closeTop()) return true;   // bara den översta rutan, t.ex. betygsvalet ovanpå detaljvyn
   if (state.tab && state.tab !== "new"){ showTab("new"); return true; }
   return false;
 };
@@ -937,8 +973,10 @@ function toast(msg){
   clearTimeout(toast.h); toast.h = setTimeout(()=>t.classList.remove("show"), 3500);
 }
 
+const tvItems = {};   // tmdbId -> titel, så att "Såg du klart?" vet vad som startades
 function tvButtons(it){
   if (!TV || !tvInfo().paired) return "";
+  if (it.show.tmdbId) tvItems[it.show.tmdbId] = it;
   const approx = it.approx || {}, several = Object.keys(it.added).length > 1;
   return Object.keys(it.added).map(k => {
     // Direktlänk finns (RapidAPI-läget), eller kan slås upp vid klick om RapidAPI-nyckel finns.
@@ -991,8 +1029,27 @@ document.addEventListener("click", async e => {
     toast("Skickar till TV:n…");
     await tvCall("launch", url);
     toast("Öppnas på TV:n 📺");
+    const it = tvItems[a.dataset.tmdb];
+    if (it) store.set("lastPlayed", { id:a.dataset.tmdb, item:snapshot(it), t:Date.now(), n:0 });
   }catch(err){ toast(err.message); }
 });
+
+// ---------- "Såg du klart?" – frågar om betyg en stund efter att något startats på TV:n ----------
+const ASK_AFTER = 45*6e4, ASK_AGAIN = 3*36e5;
+function askWatched(){
+  const lp = store.get("lastPlayed", null);
+  if (!lp?.item?.show?.tmdbId || document.querySelector(".sheet.open")) return false;
+  const age = Date.now() - lp.t, it = freshItem(lp.item), id = "tmdb:"+lp.id;
+  if (age > 3*864e5 || lp.n >= 3 || markOf(id, it) === "seen"){ store.set("lastPlayed", null); return false; }
+  if (age < ASK_AFTER) return false;
+  // Skjut upp nästa fråga direkt, så att en ruta som bara stängs inte kommer tillbaka hela tiden.
+  store.set("lastPlayed", { ...lp, t:Date.now() + ASK_AGAIN - ASK_AFTER, n:(lp.n || 0) + 1 });
+  askRating(id, it, () => { render(); redrawOverlays(); }, { ask:true,
+    onRated: () => store.set("lastPlayed", null),
+    onNever: () => store.set("lastPlayed", null),
+    onLater: () => toast("Okej, jag frågar senare.") });
+  return true;
+}
 
 function renderTvSection(){
   const el = $("tvSection"); if (!el || !TV) return;
@@ -1042,11 +1099,17 @@ function pair(host, name){
 
 // ---------- Sök (TMDB) ----------
 const providerCache = {};   // tmdbId -> [tjänstnycklar]
-async function myServicesFor(tmdbId){
-  if (providerCache[tmdbId]) return providerCache[tmdbId];
-  const r = await tmdbGet(`/${tmdbId}/watch/providers`);
-  const se = r.results?.SE || {};
-  const names = [...(se.flatrate||[]), ...(se.free||[]), ...(se.ads||[])].map(p=>(p.provider_name||"").trim());
+// Tjänsterna per titel sparas ett dygn i IndexedDB (fresh = hämta nytt, används av bevakningen).
+async function myServicesFor(tmdbId, fresh=false){
+  if (!fresh && providerCache[tmdbId]) return providerCache[tmdbId];
+  let names = null;
+  if (!fresh){ const c = await bigCache.get("prov|"+tmdbId); if (c && Date.now() - c.t < 864e5) names = c.names; }
+  if (!names){
+    const r = await tmdbGet(`/${tmdbId}/watch/providers`);
+    const se = r.results?.SE || {};
+    names = [...(se.flatrate||[]), ...(se.free||[]), ...(se.ads||[])].map(p=>(p.provider_name||"").trim());
+    bigCache.set("prov|"+tmdbId, { t:Date.now(), names });
+  }
   const keys = mine().filter(svc => names.some(n => svc.match.test(n))).map(svc=>svc.key);
   return (providerCache[tmdbId] = keys);
 }
@@ -1643,8 +1706,7 @@ async function runWatch(force=false){
       const s = m.item.show;
       try{
         if (m.status === "want"){
-          delete providerCache[s.tmdbId];
-          const now = await myServicesFor(s.tmdbId);
+          const now = await myServicesFor(s.tmdbId, true);
           const before = m.svcs || Object.keys(m.item.added || {});
           const added = now.filter(k => !before.includes(k));
           if (added.length && addAlert({ id:`avail|${key}|${added.join(",")}`, key, kind:"avail",
@@ -1704,44 +1766,79 @@ async function renderForYou(){
   // Bas: det du vill se och det du sett och inte gillade sämre än 👍/sådär. 👎-titlar drar ner liknande titlar.
   const recent = Object.values(marks).filter(m => (m.status === "want" || m.status === "seen") && m.item?.show?.tmdbId)
     .sort((a,b) => b.t - a.t);
-  const base = recent.filter(m => m.rating !== "down").slice(0, 8);
-  const neg = recent.filter(m => m.rating === "down").slice(0, 6);
+  const rated = m => validRating(m.rating);
+  const base = recent.filter(m => rated(m) !== "down").slice(0, 8);
+  const neg = recent.filter(m => rated(m) === "down").slice(0, 6);
+  const liked = recent.filter(m => m.status === "seen" && rated(m) === "up").slice(0, 3);   // "Eftersom du gillade …"
   if (!base.length){ el.innerHTML = ""; return; }
-  const weight = m => m.status === "want" ? 1.2 : ({ up:1.6, mid:0.5, down:-1 })[m.rating] ?? 1;
-  const sig = [...base, ...neg].map(m => m.item.show.tmdbId + ":" + (m.rating || "")).join(",") + "|" + cfg.services.join(",");
+  const weight = m => m.status === "want" ? 1.2 : ({ up:1.6, mid:0.5, down:-1 })[rated(m)] ?? 1;
+  const sig = [...base, ...neg].map(m => m.item.show.tmdbId + ":" + (rated(m) || "")).join(",") + "|" +
+              liked.map(m => m.item.show.tmdbId).join(",") + "|" + cfg.services.join(",");
   let c = store.get("forYou", null);
   if (!c || c.sig !== sig || Date.now() - c.t > 12*36e5){
     if (forYouBusy) return;
     forYouBusy = true;
     try{
-      const score = new Map();
-      await Promise.all([...base, ...neg].map(async (m, bi) => {
-        if (m.rating === "down") bi = 0;   // 👎 räknas fullt oavsett ålder
-        const id = m.item.show.tmdbId, type = id.startsWith("movie/") ? "movie" : "tv";
-        try{
-          const r = await tmdbGet(`/${id}/recommendations`, { language:"sv-SE" });
-          (r.results || []).slice(0, 12).forEach((x, i) => {
-            if (!x.poster_path) return;
-            const k = type+"/"+x.id, e = score.get(k) || { x, type, s:0 };
-            e.s += weight(m) * (1 - i/24) * (1 - bi/16);
-            score.set(k, e);
-          });
-        }catch{}
+      // Rekommendationerna per titel sparas ett dygn, så ett nytt betyg räknas om utan nya anrop.
+      const recsOf = new Map();
+      await Promise.all([...new Set([...base, ...neg, ...liked].map(m => m.item.show.tmdbId))].map(async id => {
+        try{ recsOf.set(id, await recsFor(id)); }catch{}
       }));
+      const typeOf = id => id.startsWith("movie/") ? "movie" : "tv";
+      const score = new Map();
+      [...base, ...neg].forEach((m, bi) => {
+        if (rated(m) === "down") bi = 0;   // 👎 räknas fullt oavsett ålder
+        const id = m.item.show.tmdbId, type = typeOf(id);
+        (recsOf.get(id) || []).forEach((x, i) => {
+          if (!x.poster_path) return;
+          const k = type+"/"+x.id, e = score.get(k) || { x, type, s:0 };
+          e.s += weight(m) * (1 - i/24) * (1 - bi/16);
+          score.set(k, e);
+        });
+      });
       const marked = new Set(Object.entries(marks).filter(([,m]) => m.status).map(([k]) => k));
       const cands = [...score.entries()].filter(([k, e]) => !marked.has(k) && e.s > 0).sort((a,b) => b[1].s - a[1].s)
         .slice(0, 40).map(([,e]) => searchItem(e.x, e.type));
-      await fillServices(cands);
-      c = { t:Date.now(), sig, items:cands.filter(it => Object.keys(it.added).length).slice(0, 15) };
+      // En rad per titel du gett 👍 (de får välja först), och ✨ För dig med resten.
+      const shown = new Set(), because = [];
+      for (const m of liked){
+        const id = m.item.show.tmdbId;
+        const list = (recsOf.get(id) || []).filter(x => x.poster_path).map(x => searchItem(x, typeOf(id)))
+          .filter(it => !marked.has(it.show.tmdbId) && !shown.has(it.show.tmdbId));
+        await fillServices(list);
+        const row = list.filter(it => Object.keys(it.added).length).slice(0, 8);
+        if (row.length < 2) continue;
+        row.forEach(it => shown.add(it.show.tmdbId));
+        because.push({ title:m.item.show.title, items:row });
+      }
+      const rest = cands.filter(it => !shown.has(it.show.tmdbId));
+      await fillServices(rest);
+      const items = rest.filter(it => Object.keys(it.added).length).slice(0, 15);
+      c = { t:Date.now(), sig, items, because };
       store.set("forYou", c);
     } finally { forYouBusy = false; }
   }
-  const items = c.items.filter(it => !markOf("tmdb:"+it.show.tmdbId, it))
+  const visible = list => (list || []).filter(it => !markOf("tmdb:"+it.show.tmdbId, it))
     .filter(it => state.type === "all" || it.show.showType === state.type);
-  if (!items.length){ el.innerHTML = ""; return; }
-  el.innerHTML = `<h3>✨ För dig</h3>`;
-  const row = document.createElement("div"); row.className = "hrow"; el.appendChild(row);
-  items.forEach(it => row.appendChild(card("tmdb:"+it.show.tmdbId, freshItem(it))));
+  const rows = [{ h:"✨ För dig", items:visible(c.items) },
+                ...(c.because || []).map(b => ({ h:`Eftersom du gillade ${esc(b.title)}`, items:visible(b.items), because:true }))]
+    .filter(r => r.items.length >= (r.because ? 2 : 1));
+  el.innerHTML = "";
+  for (const r of rows){
+    el.insertAdjacentHTML("beforeend", `<h3>${r.h}</h3>`);
+    const row = document.createElement("div"); row.className = "hrow"; el.appendChild(row);
+    r.items.forEach(it => row.appendChild(card("tmdb:"+it.show.tmdbId, freshItem(it))));
+  }
+}
+async function recsFor(id){
+  const k = "recs|"+id, c = await bigCache.get(k);
+  if (c && Date.now() - c.t < 864e5) return c.results;
+  const r = await tmdbGet(`/${id}/recommendations`, { language:"sv-SE" });
+  const results = (r.results || []).slice(0, 12).map(x => ({ id:x.id, title:x.title, name:x.name, poster_path:x.poster_path,
+    backdrop_path:x.backdrop_path, release_date:x.release_date, first_air_date:x.first_air_date,
+    vote_average:x.vote_average, vote_count:x.vote_count, overview:x.overview }));
+  bigCache.set(k, { t:Date.now(), results });
+  return results;
 }
 
 // ---------- Betyg från IMDb, Rotten Tomatoes och Metacritic (OMDb) ----------
@@ -1813,7 +1910,11 @@ async function syncNow(){
     }
     // Slå ihop: för varje titel vinner den senaste ändringen.
     const merged = { ...marks };
-    for (const [k, v] of Object.entries(remote)) if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
+    for (const [k, v] of Object.entries(remote)){
+      if (!v || typeof v !== "object") continue;
+      if ("rating" in v && !validRating(v.rating)) delete v.rating;   // okända betyg från gisten ignoreras
+      if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
+    }
     const diff = (a, b) => Object.keys(a).some(k => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
     const localChanged = diff(merged, marks), remoteChanged = !id || diff(merged, remote);
     marks = merged; store.set("marks", marks);
@@ -1870,8 +1971,34 @@ fetchChangelog().then(list => {
   else if (seen !== clId(list[0])) $("btnSettings").classList.add("dot");
 }).catch(() => {});
 
+// ---------- Rutor (sheets): staplas i den ordning de öppnas ----------
+// Bakåtknappen, Escape och tryck utanför stänger bara den översta. Fokus flyttas in i rutan och tillbaka.
+let sheetSeq = 0;
+const sheetFocus = new Map();
+document.querySelectorAll(".sheet").forEach(s => {
+  const panel = s.querySelector(".panel");
+  panel.setAttribute("role", "dialog"); panel.setAttribute("aria-modal", "true"); panel.tabIndex = -1;
+  new MutationObserver(() => {
+    const open = s.classList.contains("open");
+    if (open && !s.dataset.z){
+      s.dataset.z = ++sheetSeq; s.style.zIndex = 20 + sheetSeq;
+      sheetFocus.set(s, document.activeElement);
+      const h = panel.querySelector("h2"); if (h) panel.setAttribute("aria-label", h.textContent);
+      setTimeout(() => { if (s.classList.contains("open") && !panel.contains(document.activeElement)) panel.focus({ preventScroll:true }); }, 30);
+    } else if (!open && s.dataset.z){
+      delete s.dataset.z; s.style.zIndex = "";
+      const f = sheetFocus.get(s); sheetFocus.delete(s);
+      const top = topSheet();
+      if (top) top.querySelector(".panel").focus({ preventScroll:true });
+      else if (f && document.contains(f) && f !== document.body) try{ f.focus({ preventScroll:true }); }catch{}
+    }
+  }).observe(s, { attributes:true, attributeFilter:["class"] });
+  s.addEventListener("click", e => { if (e.target === s) s.classList.remove("open"); });
+});
+function topSheet(){ return [...document.querySelectorAll(".sheet.open")].sort((a, b) => (+b.dataset.z || 0) - (+a.dataset.z || 0))[0] || null; }
+function closeTop(){ const s = topSheet(); if (!s) return false; s.classList.remove("open"); return true; }
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
-document.querySelectorAll(".sheet").forEach(s=>s.addEventListener("click",e=>{ if(e.target===s) closeSheets(); }));
+document.addEventListener("keydown", e => { if (e.key === "Escape" && closeTop()) e.preventDefault(); });
 
 // filter
 // Film/serie gäller i alla flikar.
@@ -1891,7 +2018,8 @@ function showTab(t){
   state.tab = t;
   document.querySelectorAll(".page").forEach(p => p.classList.remove("open"));
   $({ new:"pageNew", disc:"pageDisc", lists:"pageLists", search:"pageSearch" }[t]).classList.add("open");
-  document.querySelectorAll("#tabbar [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("#tabbar [data-tab]").forEach(b => { b.classList.toggle("on", b.dataset.tab === t);
+    b.toggleAttribute("aria-current", b.dataset.tab === t); if (b.dataset.tab === t) b.setAttribute("aria-current", "page"); });
   $("pageTitle").textContent = TITLES[t];
   $("typeChips").style.display = t === "search" ? "none" : "";
   $("btnFilter").style.display = t === "new" ? "" : "none";
@@ -1931,18 +2059,22 @@ document.querySelectorAll("#discTabs [data-disc]").forEach(b => b.onclick = () =
 
 // Mina listor: Vill se, Sett, Borttagna
 function renderLists(){
+  if (lists.tab === "together" && !household.length) lists.tab = "want";
   const counts = { want:0, seen:0, hidden:0 };
   for (const m of Object.values(marks)) if (m.item && counts[m.status] != null) counts[m.status]++;
-  const lbl = { want:"⭐ Vill se", seen:"✓ Sett", hidden:"🗑 Borttagna" };
+  const lbl = { want:"⭐ Vill se", seen:"✓ Sett", hidden:"🗑 Borttagna", together:"👥 Tillsammans" };
   document.querySelectorAll("#listTabs [data-list]").forEach(b => {
     b.classList.toggle("on", b.dataset.list === lists.tab);
+    b.setAttribute("aria-pressed", b.dataset.list === lists.tab);
+    if (b.dataset.list === "together") b.style.display = household.length ? "" : "none";
     b.textContent = lbl[b.dataset.list] + (counts[b.dataset.list] ? ` (${counts[b.dataset.list]})` : "");
   });
+  if (lists.tab === "together") return renderTogether();
   const items = Object.entries(marks).filter(([,m]) => m.status === lists.tab && m.item)
     .filter(([,m]) => state.type === "all" || m.item.show.showType === state.type)
     .sort((a,b) => b[1].t - a[1].t);
   const g = $("listGrid"), st = $("listStatus");
-  g.innerHTML = "";
+  g.innerHTML = ""; g.dataset.tab = lists.tab;
   st.style.display = items.length ? "none" : "";
   st.textContent = { want:"Inget sparat än. Tryck ⭐ Vill se på en titel.", seen:"Inget markerat som sett än.", hidden:"Inget borttaget." }[lists.tab];
   for (const [key, m] of items){
@@ -1951,6 +2083,91 @@ function renderLists(){
   }
 }
 document.querySelectorAll("#listTabs [data-list]").forEach(b => b.onclick = () => { lists.tab = b.dataset.list; renderLists(); });
+
+// ---------- Hushållet: läs andras Vill se via deras delningskod (= id för deras synk-gist) ----------
+const GIST_ID = /^[0-9a-f]{20,40}$/i;
+const hhCode = s => (String(s || "").trim().match(/([0-9a-f]{20,40})\/?$/i) || [])[1] || "";
+let household = (store.get("household", []) || []).filter(h => h && GIST_ID.test(h.code || ""));
+function saveHousehold(){ store.set("household", household); renderLists(); }
+// Hämtar en persons Vill se (bara det – Sett och betyg sparas inte). Sparas en halvtimme.
+async function hhWants(h, force=false){
+  const key = "hh|"+h.code, c = await bigCache.get(key);
+  if (!force && c && Date.now() - c.t < 30*6e4) return c.wants;
+  const r = await fetch("https://api.github.com/gists/"+encodeURIComponent(h.code), { headers:{ Accept:"application/vnd.github+json",
+    ...(cfg.ghToken ? { Authorization:"Bearer "+cfg.ghToken } : {}) } });
+  if (r.status === 404) throw new Error(`Hittade ingen lista för ${h.name} – kontrollera koden.`);
+  if (!r.ok) throw new Error(`Kunde inte hämta ${h.name}s lista (GitHub svarade ${r.status}).`);
+  const g = await r.json(), f = g.files?.[GIST_FILE];
+  if (!f) throw new Error(`Koden för ${h.name} pekar inte på en lista från Nytt att se.`);
+  const raw = safeUrl(f.raw_url);
+  const txt = f.truncated && raw.startsWith("https://gist.githubusercontent.com/") ? await (await fetch(raw)).text() : f.content;
+  let all = {}; try{ all = JSON.parse(txt).marks || {}; }catch{}
+  const wants = {};
+  for (const [k, v] of Object.entries(all))
+    if (v && v.status === "want" && v.item?.show?.tmdbId && typeof v.item.show.title === "string")
+      wants[k] = { t:+v.t || 0, item:{ show:v.item.show, added:v.item.added || {}, links:v.item.links || {}, approx:v.item.approx || {}, search:true } };
+  bigCache.set(key, { t:Date.now(), wants });
+  return wants;
+}
+let togetherSeq = 0;
+async function renderTogether(force=false){
+  const seq = ++togetherSeq, g = $("listGrid"), st = $("listStatus");
+  if (g.dataset.tab !== "together" || force){ g.innerHTML = ""; st.style.display = ""; st.textContent = "Hämtar hushållets listor…"; }
+  g.dataset.tab = "together";
+  const res = await Promise.allSettled(household.map(h => hhWants(h, force)));
+  if (seq !== togetherSeq || lists.tab !== "together" || state.tab !== "lists") return;
+  const byKey = new Map(), add = (k, item, who, t) => {
+    const e = byKey.get(k) || { item, who:[], t:0 }; e.who.push(who); e.t = Math.max(e.t, t || 0); byKey.set(k, e); };
+  for (const [k, m] of Object.entries(marks)) if (m.status === "want" && m.item) add(k, m.item, "Du", m.t);
+  res.forEach((r, i) => { if (r.status === "fulfilled") for (const [k, m] of Object.entries(r.value)) add(k, m.item, household[i].name, m.t); });
+  const typeOk = e => state.type === "all" || e.item.show.showType === state.type;
+  const all = [...byKey.entries()].filter(([, e]) => typeOk(e));
+  const both = all.filter(([, e]) => e.who.includes("Du") && e.who.length > 1).sort((a, b) => b[1].who.length - a[1].who.length || b[1].t - a[1].t);
+  const others = all.filter(([k, e]) => !e.who.includes("Du") && !marks[k]?.status).sort((a, b) => b[1].who.length - a[1].who.length || b[1].t - a[1].t);
+  const errs = res.filter(r => r.status === "rejected").map(r => r.reason?.message || "Fel");
+  g.innerHTML = "";
+  const section = (h, list) => {
+    if (!list.length) return;
+    g.insertAdjacentHTML("beforeend", `<h3 class="sec">${h}</h3>`);
+    for (const [k, e] of list){
+      const live = [...state.shows.entries()].find(([id, it]) => markKey(id, it) === k);
+      const c = live ? card(live[0], live[1]) : card(k, freshItem(e.item));
+      c.insertAdjacentHTML("beforeend", `<div class="who">${esc(e.who.join(" + "))}</div>`);
+      g.appendChild(c);
+    }
+  };
+  section("👥 Vill ni båda se", both);
+  section("Andra i hushållet vill se", others);
+  st.style.display = both.length || others.length ? (errs.length ? "" : "none") : "";
+  st.textContent = errs.length ? errs.join(" ") : both.length || others.length ? "" : "Inget gemensamt än. När ni ⭐-märkar samma titel hamnar den här.";
+}
+
+function renderHousehold(){
+  const el = $("hhSection"); if (!el) return;
+  const myCode = store.get("gistId", null);
+  el.innerHTML = `
+    <p class="tip" style="margin-top:0">${myCode ? "Din delningskod – ge den till dem du bor med:" : "Slå på synken ovan för att få en egen delningskod."}</p>
+    ${myCode ? `<div class="row"><input id="hhMyCode" readonly value="${esc(myCode)}"><button id="hhCopy">Kopiera</button></div>` : ""}
+    <div id="hhList">${household.map((h, i) => `<div class="hhrow"><span>👤 ${esc(h.name)}</span><button data-hhdel="${i}" aria-label="Ta bort ${esc(h.name)}">✕</button></div>`).join("")}</div>
+    <label for="hhName">Lägg till någon</label>
+    <input id="hhName" autocomplete="off" placeholder="Namn, t.ex. Anna">
+    <input id="hhCodeIn" autocomplete="off" spellcheck="false" placeholder="Deras delningskod" style="margin-top:8px">
+    <div class="actions" style="margin-top:6px"><a href="#" id="hhAdd">👥 Lägg till</a></div>
+    <p class="tip">Med en delningskod kan appen läsa den personens markeringar. Under ⭐ Mina listor → 👥 Tillsammans visas det ni båda vill se.</p>`;
+  if ($("hhCopy")) $("hhCopy").onclick = async () => {
+    try{ await navigator.clipboard.writeText(myCode); toast("Koden är kopierad"); }
+    catch{ $("hhMyCode").select(); toast("Markerad – kopiera med långt tryck"); }
+  };
+  el.querySelectorAll("[data-hhdel]").forEach(b => b.onclick = () => { household.splice(+b.dataset.hhdel, 1); saveHousehold(); renderHousehold(); });
+  $("hhAdd").onclick = e => { e.preventDefault();
+    const code = hhCode($("hhCodeIn").value), name = $("hhName").value.trim().slice(0, 30) || `Person ${household.length + 1}`;
+    if (!code) return toast("Koden ser inte rätt ut – den är 32 tecken (0–9, a–f).");
+    if (code === myCode) return toast("Det är din egen kod.");
+    if (household.some(h => h.code === code)) return toast("Den koden finns redan.");
+    household.push({ name, code }); saveHousehold(); renderHousehold();
+    toast(`${name} är tillagd 👥`);
+  };
+}
 
 // Bevakning: klockan högst upp
 function updateBell(n){ const b = $("bellBadge"); b.textContent = n; b.style.display = n ? "" : "none"; }
@@ -2003,7 +2220,7 @@ $("btnSettings").onclick = ()=>{
   $("serviceBoxes").innerHTML = SERVICES.map(s=>`<label class="chk"><input type="checkbox" value="${s.key}" ${cfg.services.includes(s.key)?"checked":""}> ${s.label}</label>`).join("");
   $("langOn").checked = cfg.langOn;
   $("langBoxes").innerHTML = LANGS.map(l=>`<label class="chk"><input type="checkbox" value="${l.code}" ${cfg.langs.includes(l.code)?"checked":""}> ${l.label}</label>`).join("");
-  renderTvSection();
+  renderTvSection(); renderHousehold();
   if (store.get("syncMsg", null) && cfg.ghToken) $("syncStatus").textContent = store.get("syncMsg");
   $("settings").classList.add("open"); };
 $("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
@@ -2028,10 +2245,17 @@ $("watchNowBtn").onclick = async e => { e.preventDefault(); toast("Kollar bevakn
 
 bigCache.get(expKey());
 load();
-setTimeout(async () => { if (cfg.ghToken) await syncNow(); runWatch(); }, 1200);
+setTimeout(async () => { if (cfg.ghToken) await syncNow(); runWatch(); askWatched(); }, 1200);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && cfg.ghToken && Date.now() - store.get("syncT", 0) > 5*6e4) syncNow();
+  if (document.visibilityState !== "visible") return;
+  if (cfg.ghToken && Date.now() - store.get("syncT", 0) > 5*6e4) syncNow();
+  setTimeout(askWatched, 800);
 });
+// Rensa gamla rekommendationer, tjänstuppslag och hushållslistor en gång per dygn.
+if (store.get("pruneDay", "") !== dayKey()){
+  store.set("pruneDay", dayKey());
+  setTimeout(() => bigCache.prune((k, v) => /^(prov|recs|hh)\|/.test(k) && !(v && Date.now() - v.t < 2*864e5)), 5000);
+}
 </script>
 </body>
 </html>

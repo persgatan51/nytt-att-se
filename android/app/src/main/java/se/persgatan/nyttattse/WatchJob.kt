@@ -74,6 +74,17 @@ object WatchChecker {
             LinkedHashSet<String>().apply { for (i in 0 until a.length()) add(a.getString(i)) }
         }
 
+        // Sparas i finally, så att skickade notiser och nya tjänster/säsonger inte glöms om
+        // systemet avbryter jobbet halvvägs (annars kommer samma notis igen nästa gång).
+        try {
+            checkAll(ctx, cfg, key, services, notified)
+        } finally {
+            val keep = notified.toList().takeLast(300)
+            prefs.edit().putString("cfg", cfg.toString()).putString("notified", JSONArray(keep).toString()).commit()
+        }
+    }
+
+    private fun checkAll(ctx: Context, cfg: JSONObject, key: String, services: JSONArray, notified: LinkedHashSet<String>) {
         val want = cfg.optJSONArray("want") ?: JSONArray()
         for (i in 0 until want.length()) {
             if (Thread.currentThread().isInterrupted) return
@@ -121,9 +132,6 @@ object WatchChecker {
                 s.put("seasons", aired)
             }
         }
-
-        val keep = notified.toList().takeLast(300)
-        prefs.edit().putString("cfg", cfg.toString()).putString("notified", JSONArray(keep).toString()).apply()
     }
 
     private fun JSONArray?.strings(): List<String> =

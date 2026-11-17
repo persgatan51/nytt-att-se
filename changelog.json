@@ -1,5 +1,27 @@
 [
   {
+    "date": "2026-11-17",
+    "title": "Tillsammans, Såg du klart? och fler förslag",
+    "changes": [
+      "👥 Tillsammans: lägg till de du bor med under ⚙︎ → Hushållet med deras delningskod. Under Mina listor → 👥 Tillsammans ser ni det ni båda vill se, och vad de andra vill se.",
+      "Såg du klart? En stund efter att du startat något på TV:n frågar appen vad du tyckte, så att du kan ge 👍, tumme åt sidan eller 👎 direkt. Du kan svara Inte än eller Fråga inte.",
+      "✨ För dig får egna rader – Eftersom du gillade … – för titlar du gett 👍.",
+      "För dig laddar snabbare och använder färre anrop när du ändrar ett betyg.",
+      "Du kan ta bort ett betyg utan att markera titeln som osedd."
+    ]
+  },
+  {
+    "date": "2026-11-17",
+    "title": "Buggrättningar",
+    "changes": [
+      "När du betygsätter en titel i detaljvyn ligger detaljvyn kvar.",
+      "Bakåtknappen, Escape och tryck utanför stänger bara den översta rutan, inte allt bakom.",
+      "Android-appen: samma bevakningsnotis kan inte längre komma två gånger om telefonen avbryter bakgrundskollen.",
+      "Räknaren för RapidAPI-anrop nollställs vid midnatt svensk tid i stället för 01.00 eller 02.00.",
+      "Bättre stöd för skärmläsare: rutorna läses som dialoger och betygen på korten läses upp med ord."
+    ]
+  },
+  {
     "date": "2026-11-16",
     "title": "Betygsätt det du sett",
     "changes": [
