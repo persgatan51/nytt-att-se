@@ -1,5 +1,16 @@
 [
   {
+    "date": "2026-11-18",
+    "title": "Buggrättningar",
+    "changes": [
+      "Bekräftelserna längst ner (t.ex. \"Öppnas på TV:n 📺\") syns alltid, även när du har öppnat många rutor.",
+      "👥 Tillsammans visar var titlarna finns på dina tjänster just nu, inte på den andras. Står det \"Inte på dina tjänster\" har du den inte.",
+      "Lägger du till någon i hushållet med samma namn som någon annan (eller \"Du\") får hen ett nummer efter namnet, så att det syns vem som vill se vad.",
+      "Bättre stöd för skärmläsare och tangentbord: när en ruta är öppen stannar du i rutan.",
+      "Android-appen: bara Nytt att se kan styra din TV, inte andra sidor."
+    ]
+  },
+  {
     "date": "2026-11-17",
     "title": "Tillsammans, Såg du klart? och fler förslag",
     "changes": [

@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,7 +26,18 @@ class MainActivity : Activity() {
     companion object {
         const val START_URL = "https://persgatan51.github.io/nytt-att-se/"
         const val HOST = "persgatan51.github.io"
+        const val PATH = "/nytt-att-se"
+
+        // Bara appens egen sida (inte andra Pages-projekt på samma konto) får använda TvBridge.
+        fun isOurPage(uri: Uri?): Boolean {
+            if (uri == null || uri.scheme != "https" || uri.host != HOST) return false
+            val p = uri.path ?: return false
+            return p == PATH || p.startsWith("$PATH/")
+        }
     }
+
+    // Sätts när en sida börjar laddas; läses från bryggans trådar.
+    @Volatile private var trusted = false
 
     private lateinit var web: WebView
     private lateinit var tv: TvRemote
@@ -45,10 +57,20 @@ class MainActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
-                if (uri.host == HOST) return false
-                // Allt annat (Netflix, YouTube, TMDB …) öppnas i rätt app på telefonen.
+                if (isOurPage(uri)) return false
+                // Allt annat (Netflix, YouTube, TMDB, andra sidor på github.io …) öppnas i rätt app på telefonen.
                 try { startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) {}
                 return true
+            }
+
+            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                trusted = isOurPage(url?.let { Uri.parse(it) })
+                super.onPageStarted(view, url, favicon)
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                trusted = isOurPage(url?.let { Uri.parse(it) })
+                super.doUpdateVisitedHistory(view, url, isReload)
             }
         }
         web.addJavascriptInterface(Bridge(), "TvBridge")
@@ -56,8 +78,10 @@ class MainActivity : Activity() {
         web.setOnLongClickListener { true }
         web.isHapticFeedbackEnabled = false
         // ?v= gör att sidan alltid hämtas färsk vid start (GitHub Pages cachar annars i upp till 10 min).
-        if (savedInstanceState != null) web.restoreState(savedInstanceState)
-        else web.loadUrl(START_URL + "?v=" + System.currentTimeMillis())
+        if (savedInstanceState != null) {
+            web.restoreState(savedInstanceState)
+            trusted = isOurPage(web.url?.let { Uri.parse(it) })
+        } else web.loadUrl(START_URL + "?v=" + System.currentTimeMillis())
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -82,14 +106,17 @@ class MainActivity : Activity() {
     }
 
     private fun async(id: String, block: () -> String) = worker.execute {
-        try { reply(id, true, block()) }
+        try {
+            if (!trusted) throw TvRemote.TvException("Den här sidan får inte styra TV:n.")
+            reply(id, true, block())
+        }
         catch (e: TvRemote.TvException) { reply(id, false, e.message ?: "Fel") }
         catch (e: Exception) { reply(id, false, "Något gick fel: ${e.message ?: e.javaClass.simpleName}") }
     }
 
     inner class Bridge {
         @JavascriptInterface fun version(): String = "1"
-        @JavascriptInterface fun getTv(): String = JSONObject()
+        @JavascriptInterface fun getTv(): String = if (!trusted) "{}" else JSONObject()
             .put("host", prefs.getString("host", "") ?: "")
             .put("name", prefs.getString("name", "") ?: "")
             .put("paired", prefs.getBoolean("paired", false)).toString()
@@ -121,6 +148,7 @@ class MainActivity : Activity() {
 
         // Bevakningslistan från webbappen; kollas i bakgrunden av WatchJob och ger notiser.
         @JavascriptInterface fun setWatch(json: String) {
+            if (!trusted) return
             // Skrivs med samma lås som WatchChecker.run, så att en pågående bakgrundskoll inte
             // skriver tillbaka en äldre lista över den nya (och utan att JavaScript får vänta).
             watchWorker.execute {
@@ -138,8 +166,9 @@ class MainActivity : Activity() {
             }
         }
 
-        @JavascriptInterface fun checkWatchNow() = watchWorker.execute {
-            try { WatchChecker.run(this@MainActivity) } catch (_: Exception) {}
+        @JavascriptInterface fun checkWatchNow() {
+            if (!trusted) return
+            watchWorker.execute { try { WatchChecker.run(this@MainActivity) } catch (_: Exception) {} }
         }
 
         // Om notiser är avstängda visar webbappen en knapp under ⚙︎ som öppnar inställningen.
@@ -149,6 +178,7 @@ class MainActivity : Activity() {
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
 
         @JavascriptInterface fun openNotifSettings() = runOnUiThread {
+            if (!trusted) return@runOnUiThread
             try {
                 startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
@@ -156,6 +186,7 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface fun openExternal(url: String) = runOnUiThread {
+            if (!trusted) return@runOnUiThread
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
         }
     }

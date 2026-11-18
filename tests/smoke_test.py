@@ -82,7 +82,7 @@ def github(route):
     if HH_CODE in r.url:
         body={"files":{"nytt-att-se.json":{"truncated":False,"content":json.dumps({"v":1,"marks":{
             "movie/705":{"status":"want","t":5,"item":{"show":{"showType":"movie","tmdbId":"movie/705","title":"Båda vill se","imageSet":{}},"added":{},"links":{}}},
-            "movie/706":{"status":"want","t":6,"item":{"show":{"showType":"movie","tmdbId":"movie/706","title":"Anna vill se","imageSet":{}},"added":{},"links":{}}},
+            "movie/706":{"status":"want","t":6,"item":{"show":{"showType":"movie","tmdbId":"movie/706","title":"Anna vill se","imageSet":{}},"added":{"hbo":0},"links":{"hbo":"https://play.max.com/x"}}},
             "movie/707":{"status":"seen","rating":"down","t":7,"item":{"show":{"showType":"movie","tmdbId":"movie/707","title":"Anna har sett","imageSet":{}},"added":{},"links":{}}}}})}}}
     elif r.url.endswith("/gists?per_page=100&page=1"): body=[{"id":"g1","files":{"nytt-att-se.json":{}}}] if gist["content"] else []
     elif m == "POST" or m == "PATCH":
@@ -226,8 +226,23 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("__tvBack()"); pg.wait_for_timeout(50)
     check(pg.locator("#rate.open").count() == 0 and pg.locator("#detail.open").count() == 1, "bakåt stänger bara betygsrutan, inte detaljvyn")
     check(pg.locator("#detail .panel[role='dialog'][aria-modal='true']").count() == 1, "rutorna är dialoger för skärmläsare")
+    check(pg.evaluate("document.querySelector('main').inert && document.querySelector('#tabbar').inert && !document.querySelector('#detail').inert"),
+          "sidan bakom en öppen ruta är inert")
+    pg.evaluate("askRating('tmdb:movie/704', { show:{ showType:'movie', tmdbId:'movie/704', title:'Stapel', imageSet:{} }, added:{}, links:{}, approx:{} }, () => {})")
+    pg.wait_for_timeout(80)
+    for _ in range(12): pg.keyboard.press("Tab")
+    check(pg.evaluate("document.querySelector('#rate').contains(document.activeElement) && document.querySelector('#detail').inert"),
+          "Tab stannar i den översta rutan")
+    pg.keyboard.press("Escape"); pg.wait_for_timeout(50)
     pg.keyboard.press("Escape"); pg.wait_for_timeout(50)
     check(pg.locator(".sheet.open").count() == 0, "Escape stänger detaljvyn")
+    check(pg.evaluate("!document.querySelector('main').inert"), "sidan är inte inert när rutorna är stängda")
+    # Toasten ska synas ovanpå rutorna även efter många öppnade rutor.
+    pg.evaluate("""async () => { for (let i = 0; i < 40; i++){ $('detail').classList.add('open'); await null; $('detail').classList.remove('open'); await null; } }""")
+    pg.evaluate("$('detail').classList.add('open')"); pg.wait_for_timeout(50)
+    check(pg.evaluate("+getComputedStyle($('toast')).zIndex > +getComputedStyle($('detail')).zIndex && sheetSeq === 1"),
+          "toasten ligger över rutorna efter 40 öppnade rutor")
+    pg.evaluate("closeSheets()"); pg.wait_for_timeout(50)
 
     # Okända betyg från gisten ignoreras.
     gist["content"] = json.dumps({"v":1,"marks":{"movie/708":{"status":"seen","rating":"toString","t":9e12,
@@ -266,11 +281,32 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     txt = pg.locator("#listGrid").inner_text()
     check("Vill ni båda se" in txt and "Båda vill se" in txt and "Du + Anna" in txt and "Anna vill se" in txt and "Anna har sett" not in txt,
           "Tillsammans visar det ni båda vill se")
+    anna = pg.locator("#listGrid .item", has_text="Anna vill se").inner_text()
+    both = pg.locator("#listGrid .item", has_text="Båda vill se").inner_text()
+    check("HBO Max" not in anna and "Netflix" in anna and "Inte på dina tjänster" in both,
+          f"Tillsammans visar dina tjänster, inte den andras ({anna!r} / {both!r})")
+    # Någon i hushållet som heter "Du" blandas inte ihop med dig.
+    pg.evaluate(f"household = [{{ name:'Du', code:'{HH_CODE}' }}]; saveHousehold()"); pg.wait_for_timeout(600)
+    txt = pg.locator("#listGrid").inner_text()
+    check("Du + Du" in txt and "Andra i hushållet vill se" in txt, "en person som heter Du blandas inte ihop med dig")
+    pg.evaluate(f"household = [{{ name:'Anna', code:'{HH_CODE}' }}]; saveHousehold()")
     pg.evaluate("closeSheets()"); pg.click("#btnSettings"); pg.wait_for_timeout(100)
     pg.fill("#hhName", "Bo"); pg.fill("#hhCodeIn", "https://gist.github.com/bo/0123456789abcdef0123456789abcdef"); pg.click("#hhAdd")
     check(pg.evaluate("household.length === 2 && household[1].code === '0123456789abcdef0123456789abcdef'") and "Bo" in pg.locator("#hhList").inner_text(),
           "lägga till i hushållet med gist-länk")
+    pg.fill("#hhName", "anna"); pg.fill("#hhCodeIn", "1123456789abcdef0123456789abcdef"); pg.click("#hhAdd")
+    pg.fill("#hhName", "Du"); pg.fill("#hhCodeIn", "2123456789abcdef0123456789abcdef"); pg.click("#hhAdd")
+    check(pg.evaluate("household.map(h => h.name).join(',')") == "Anna,Bo,anna 2,Du 2", "namnen i hushållet blir unika")
     pg.evaluate("closeSheets()")
+
+    # Rensningen tar bara gamla poster med rätt prefix.
+    pg.evaluate("""async () => { await bigCache.set('recs|movie/1', { t:0, results:[] }); await bigCache.set('recs|movie/2', { t:Date.now(), results:[] });
+        await bigCache.set('top|gammal', { t:0 }); await bigCache.prune(['prov|', 'recs|', 'hh|'], (k, v) => !(v && Date.now() - v.t < 2*864e5)); }""")
+    pg.wait_for_timeout(200)
+    check(pg.evaluate("""async () => { const r = await new Promise(ok => { const q = indexedDB.open('nytt-att-se'); q.onsuccess = () => {
+        const st = q.result.transaction('cache').objectStore('cache'), a = st.getAllKeys(); a.onsuccess = () => ok(a.result); }; });
+        return !r.includes('recs|movie/1') && r.includes('recs|movie/2') && r.includes('top|gammal'); }"""),
+          "rensningen tar bara gamla rekommendationer, inte dagslistor")
 
     # TV-start sparar vad som startades (med påhittad TvBridge).
     tv = ctx.new_page(); tv.on("pageerror", lambda e: errs.append("JS: "+str(e)))

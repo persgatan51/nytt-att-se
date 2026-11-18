@@ -84,7 +84,7 @@
   .actions a{display:block;text-align:center;padding:12px;border-radius:12px;text-decoration:none;color:#fff;font-weight:600;background:var(--card);border:1px solid var(--line)}
   .actions a.tv{background:#1b7f4b;border-color:#1b7f4b}
   #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);
-         background:#2a2f3a;color:var(--fg);padding:10px 16px;border-radius:12px;opacity:0;transition:.25s;z-index:50;
+         background:#2a2f3a;color:var(--fg);padding:10px 16px;border-radius:12px;opacity:0;transition:.25s;z-index:1000;
          max-width:90vw;text-align:center;pointer-events:none}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .actions a.trailer{background:#2a2f3a;border-color:#3a4150}
@@ -360,10 +360,11 @@ const bigCache = (() => {
     },
     peek: k => mem.get(k) ?? null,                  // synkron läsning av det som redan laddats
     async set(k, v){ mem.set(k, v); try{ await tx("readwrite", st => st.put(v, k)); }catch(e){ console.warn("Cache:", e); } },
-    // Tar bort poster där drop(nyckel, värde) är sant (t.ex. gamla rekommendationer och tjänstuppslag).
-    async prune(drop){
-      try{ await tx("readwrite", st => { const r = st.openCursor();
-        r.onsuccess = () => { const c = r.result; if (!c) return; if (drop(String(c.key), c.value)){ c.delete(); mem.delete(c.key); } c.continue(); };
+    // Tar bort poster med något av prefixen där drop(nyckel, värde) är sant (t.ex. gamla rekommendationer).
+    // Bara nycklar med prefixen läses, så de stora dagslistorna rörs inte.
+    async prune(prefixes, drop){
+      try{ await tx("readwrite", st => { for (const p of prefixes){ const r = st.openCursor(IDBKeyRange.bound(p, p + "\uffff"));
+        r.onsuccess = () => { const c = r.result; if (!c) return; if (drop(String(c.key), c.value)){ c.delete(); mem.delete(c.key); } c.continue(); }; }
         return null; }); }catch{}
     },
   };
@@ -1983,12 +1984,15 @@ document.querySelectorAll(".sheet").forEach(s => {
     if (open && !s.dataset.z){
       s.dataset.z = ++sheetSeq; s.style.zIndex = 20 + sheetSeq;
       sheetFocus.set(s, document.activeElement);
+      updateInert();
       const h = panel.querySelector("h2"); if (h) panel.setAttribute("aria-label", h.textContent);
       setTimeout(() => { if (s.classList.contains("open") && !panel.contains(document.activeElement)) panel.focus({ preventScroll:true }); }, 30);
     } else if (!open && s.dataset.z){
       delete s.dataset.z; s.style.zIndex = "";
       const f = sheetFocus.get(s); sheetFocus.delete(s);
       const top = topSheet();
+      if (!top) sheetSeq = 0;   // börja om när allt är stängt, så att rutorna aldrig hamnar över toasten
+      updateInert();
       if (top) top.querySelector(".panel").focus({ preventScroll:true });
       else if (f && document.contains(f) && f !== document.body) try{ f.focus({ preventScroll:true }); }catch{}
     }
@@ -1997,8 +2001,30 @@ document.querySelectorAll(".sheet").forEach(s => {
 });
 function topSheet(){ return [...document.querySelectorAll(".sheet.open")].sort((a, b) => (+b.dataset.z || 0) - (+a.dataset.z || 0))[0] || null; }
 function closeTop(){ const s = topSheet(); if (!s) return false; s.classList.remove("open"); return true; }
+// Allt utom den översta rutan görs inert, så att Tab och skärmläsare stannar i rutan (aria-modal).
+function updateInert(){
+  const top = topSheet();
+  document.querySelectorAll("body > header, body > main, body > #tabbar, body > .sheet").forEach(el => {
+    el.inert = !!top && el !== top; });
+}
+// Tab går runt inne i den översta rutan (för webbläsare utan stöd för inert).
+function trapTab(e){
+  const s = topSheet(); if (!s) return;
+  const panel = s.querySelector(".panel");
+  const f = [...panel.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter(x => !x.disabled && x.getClientRects().length);
+  const a = document.activeElement;
+  if (!f.length){ e.preventDefault(); panel.focus(); return; }
+  const first = f[0], last = f[f.length - 1];
+  if (!panel.contains(a)){ e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+  else if (e.shiftKey && (a === first || a === panel)){ e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && a === last){ e.preventDefault(); first.focus(); }
+}
 function closeSheets(){ document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("open")); }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && closeTop()) e.preventDefault(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && closeTop()) e.preventDefault();
+  else if (e.key === "Tab") trapTab(e);
+});
 
 // filter
 // Film/serie gäller i alla flikar.
@@ -2085,7 +2111,7 @@ function renderLists(){
 document.querySelectorAll("#listTabs [data-list]").forEach(b => b.onclick = () => { lists.tab = b.dataset.list; renderLists(); });
 
 // ---------- Hushållet: läs andras Vill se via deras delningskod (= id för deras synk-gist) ----------
-const GIST_ID = /^[0-9a-f]{20,40}$/i;
+const GIST_ID = /^[0-9a-f]{20,40}$/i, ME = Symbol("du");
 const hhCode = s => (String(s || "").trim().match(/([0-9a-f]{20,40})\/?$/i) || [])[1] || "";
 let household = (store.get("household", []) || []).filter(h => h && GIST_ID.test(h.code || ""));
 function saveHousehold(){ store.set("household", household); renderLists(); }
@@ -2116,30 +2142,59 @@ async function renderTogether(force=false){
   g.dataset.tab = "together";
   const res = await Promise.allSettled(household.map(h => hhWants(h, force)));
   if (seq !== togetherSeq || lists.tab !== "together" || state.tab !== "lists") return;
+  // ME skiljer dig från de andra, även om någon i hushållet skulle heta "Du".
   const byKey = new Map(), add = (k, item, who, t) => {
-    const e = byKey.get(k) || { item, who:[], t:0 }; e.who.push(who); e.t = Math.max(e.t, t || 0); byKey.set(k, e); };
-  for (const [k, m] of Object.entries(marks)) if (m.status === "want" && m.item) add(k, m.item, "Du", m.t);
+    const e = byKey.get(k) || { item, who:[], t:0 }; if (!e.who.includes(who)) e.who.push(who); e.t = Math.max(e.t, t || 0); byKey.set(k, e); };
+  for (const [k, m] of Object.entries(marks)) if (m.status === "want" && m.item) add(k, m.item, ME, m.t);
   res.forEach((r, i) => { if (r.status === "fulfilled") for (const [k, m] of Object.entries(r.value)) add(k, m.item, household[i].name, m.t); });
   const typeOk = e => state.type === "all" || e.item.show.showType === state.type;
   const all = [...byKey.entries()].filter(([, e]) => typeOk(e));
-  const both = all.filter(([, e]) => e.who.includes("Du") && e.who.length > 1).sort((a, b) => b[1].who.length - a[1].who.length || b[1].t - a[1].t);
-  const others = all.filter(([k, e]) => !e.who.includes("Du") && !marks[k]?.status).sort((a, b) => b[1].who.length - a[1].who.length || b[1].t - a[1].t);
+  const both = all.filter(([, e]) => e.who.includes(ME) && e.who.length > 1).sort((a, b) => b[1].who.length - a[1].who.length || b[1].t - a[1].t);
+  const others = all.filter(([k, e]) => !e.who.includes(ME) && !marks[k]?.status).sort((a, b) => b[1].who.length - a[1].who.length || b[1].t - a[1].t);
   const errs = res.filter(r => r.status === "rejected").map(r => r.reason?.message || "Fel");
   g.innerHTML = "";
+  const whoTxt = e => e.who.map(w => w === ME ? "Du" : w).join(" + ");
+  const withWho = (c, e) => { c.insertAdjacentHTML("beforeend", `<div class="who">${esc(whoTxt(e))}</div>`); return c; };
+  const refresh = [];   // titlar vars tjänster slås upp på nytt (dina tjänster, inte de som sparades i gisten)
   const section = (h, list) => {
     if (!list.length) return;
     g.insertAdjacentHTML("beforeend", `<h3 class="sec">${h}</h3>`);
     for (const [k, e] of list){
       const live = [...state.shows.entries()].find(([id, it]) => markKey(id, it) === k);
-      const c = live ? card(live[0], live[1]) : card(k, freshItem(e.item));
-      c.insertAdjacentHTML("beforeend", `<div class="who">${esc(e.who.join(" + "))}</div>`);
+      if (live){ g.appendChild(withWho(card(live[0], live[1]), e)); continue; }
+      const it = myServicesOnly(e.item), c = withWho(card(k, it), e);
       g.appendChild(c);
+      if (it.pending) refresh.push({ k, e, it, c });
     }
   };
   section("👥 Vill ni båda se", both);
   section("Andra i hushållet vill se", others);
   st.style.display = both.length || others.length ? (errs.length ? "" : "none") : "";
   st.textContent = errs.length ? errs.join(" ") : both.length || others.length ? "" : "Inget gemensamt än. När ni ⭐-märkar samma titel hamnar den här.";
+  for (let i = 0; i < refresh.length; i += 12){
+    await Promise.all(refresh.slice(i, i + 12).map(r => refreshServices(r.it)));
+    if (seq !== togetherSeq) return;
+    refresh.slice(i, i + 12).forEach(r => { if (r.c.isConnected) r.c.replaceWith(withWho(card(r.k, r.it), r.e)); });
+  }
+}
+// En sparad titel (egen eller från någon i hushållet) med bara dina tjänster kvar.
+// Tjänsterna i en sparad markering kan vara gamla, eller gälla någon annans abonnemang.
+function myServicesOnly(item){
+  const it = freshItem(item), mineKeys = new Set(cfg.services);
+  it.added = it.added || {}; it.links = it.links || {}; it.approx = it.approx || {};
+  for (const k of Object.keys(it.added)) if (!mineKeys.has(k)){ delete it.added[k]; delete it.links[k]; delete it.approx[k]; }
+  it.search = true; it.pending = !!(cfg.tmdbKey && it.show.tmdbId);
+  return it;
+}
+// Slår upp var titeln finns nu (sparas ett dygn) och behåller direktlänkar för tjänster som finns kvar.
+async function refreshServices(it){
+  try{
+    const now = await myServicesFor(it.show.tmdbId);
+    for (const k of Object.keys(it.added)) if (!now.includes(k)){ delete it.added[k]; delete it.links[k]; delete it.approx[k]; }
+    for (const k of now) if (!(k in it.added)){
+      it.added[k] = 0; it.approx[k] = true; it.links[k] = `https://www.themoviedb.org/${it.show.tmdbId}/watch?locale=SE`; }
+  }catch{}
+  it.pending = false;
 }
 
 function renderHousehold(){
@@ -2160,7 +2215,11 @@ function renderHousehold(){
   };
   el.querySelectorAll("[data-hhdel]").forEach(b => b.onclick = () => { household.splice(+b.dataset.hhdel, 1); saveHousehold(); renderHousehold(); });
   $("hhAdd").onclick = e => { e.preventDefault();
-    const code = hhCode($("hhCodeIn").value), name = $("hhName").value.trim().slice(0, 30) || `Person ${household.length + 1}`;
+    const code = hhCode($("hhCodeIn").value);
+    let name = $("hhName").value.trim().slice(0, 30) || `Person ${household.length + 1}`;
+    // Namnen ska vara unika (och inte "Du"), så att det syns vem som vill se vad.
+    const taken = n => n.toLowerCase() === "du" || household.some(h => h.name.toLowerCase() === n.toLowerCase());
+    if (taken(name)){ let i = 2; while (taken(`${name} ${i}`)) i++; name = `${name} ${i}`; }
     if (!code) return toast("Koden ser inte rätt ut – den är 32 tecken (0–9, a–f).");
     if (code === myCode) return toast("Det är din egen kod.");
     if (household.some(h => h.code === code)) return toast("Den koden finns redan.");
@@ -2254,7 +2313,7 @@ document.addEventListener("visibilitychange", () => {
 // Rensa gamla rekommendationer, tjänstuppslag och hushållslistor en gång per dygn.
 if (store.get("pruneDay", "") !== dayKey()){
   store.set("pruneDay", dayKey());
-  setTimeout(() => bigCache.prune((k, v) => /^(prov|recs|hh)\|/.test(k) && !(v && Date.now() - v.t < 2*864e5)), 5000);
+  setTimeout(() => bigCache.prune(["prov|", "recs|", "hh|"], (k, v) => !(v && Date.now() - v.t < 2*864e5)), 5000);
 }
 </script>
 </body>
