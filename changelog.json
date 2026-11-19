@@ -1,6 +1,15 @@
 [
   {
     "date": "2026-11-19",
+    "title": "Buggrättningar",
+    "changes": [
+      "Samma film visas inte längre flera gånger i ✨ För dig och Eftersom du gillade.",
+      "En titel du gett 👍 får bara en rad med Eftersom du gillade, även om den sparats två gånger.",
+      "Titlar du redan har markerat dyker inte längre upp bland tipsen."
+    ]
+  },
+  {
+    "date": "2026-11-19",
     "title": "🎬 Dagens filmquiz",
     "changes": [
       "Tryck på 🎬 högst upp och gissa fem filmer och serier från dina tjänster utifrån en suddig affisch.",

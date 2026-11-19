@@ -42,6 +42,7 @@ def tmdb(route):
     elif path.endswith("/recommendations"):
         n=int(path.split("/")[2]); start = 420 if n == 703 else 400   # 703 ger egna förslag ("Eftersom du gillade")
         body={"results":[mk(i) for i in range(start,start+12)]}
+        if n == 712: body={"results":[mk(i) for i in (440,440,441,441,442,443)]}   # TMDB kan ge samma förslag två gånger
     elif re.match(r"^/tv/\d+$", path):
         fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*20))
         n=int(path.split("/")[2])
@@ -268,6 +269,17 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     rc2 = sum(1 for c in calls if c.endswith("/recommendations"))
     check(rc2 == rc and "Eftersom du gillade Gillad film" not in pg.locator("#forYou h3").all_inner_texts(),
           f"ändrat betyg hämtar inga nya rekommendationer ({rc} → {rc2})")
+
+    # Samma 👍-titel sparad under två nycklar ger bara en rad, och ingen titel visas två gånger i För dig.
+    pg.evaluate("""() => { setMark('x', marks['movie/703'].item, 'seen', 'up');
+        marks['sa703'] = { ...marks['movie/703'], t:Date.now() + 5 };
+        setMark('x', { show:{ showType:'movie', tmdbId:'movie/712', title:'Annan gillad', imageSet:{} }, added:{}, links:{} }, 'seen', 'up'); }""")
+    pg.evaluate("renderForYou()"); pg.wait_for_timeout(1500)
+    heads = pg.locator("#forYou h3").all_inner_texts()
+    ids = pg.evaluate("[...document.querySelectorAll('#forYou .item')].map(c => c.dataset.tid)")
+    check(heads.count("Eftersom du gillade Gillad film") == 1 and "Eftersom du gillade Annan gillad" in heads, f"en rad per gillad titel ({heads})")
+    check(len(ids) > 0 and len(ids) == len(set(ids)), f"ingen titel visas två gånger i För dig ({len(ids)} kort, {len(set(ids))} olika)")
+    pg.evaluate("delete marks['sa703']; store.set('marks', marks)")
 
     # Såg du klart? efter TV-start.
     pg.evaluate("""() => localStorage.setItem('lastPlayed', JSON.stringify({ id:'movie/709', t:Date.now() - 2*36e5, n:0,

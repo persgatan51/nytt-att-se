@@ -1849,8 +1849,10 @@ async function renderForYou(){
   const el = $("forYou"); if (!el) return;
   if (!cfg.tmdbKey){ el.innerHTML = ""; return; }
   // Bas: det du vill se och det du sett och inte gillade sämre än 👍/sådär. 👎-titlar drar ner liknande titlar.
+  // En titel kan ligga sparad under flera nycklar (t.ex. ett gammalt id från innan TMDB-id användes) – räkna den bara en gång.
+  const once = new Set();
   const recent = Object.values(marks).filter(m => (m.status === "want" || m.status === "seen") && m.item?.show?.tmdbId)
-    .sort((a,b) => b.t - a.t);
+    .sort((a,b) => b.t - a.t).filter(m => !once.has(m.item.show.tmdbId) && once.add(m.item.show.tmdbId));
   const rated = m => validRating(m.rating);
   const base = recent.filter(m => rated(m) !== "down").slice(0, 8);
   const neg = recent.filter(m => rated(m) === "down").slice(0, 6);
@@ -1881,15 +1883,16 @@ async function renderForYou(){
           score.set(k, e);
         });
       });
-      const marked = new Set(Object.entries(marks).filter(([,m]) => m.status).map(([k]) => k));
+      const marked = new Set(Object.entries(marks).filter(([,m]) => m.status).flatMap(([k, m]) => [k, m.item?.show?.tmdbId].filter(Boolean)));
       const cands = [...score.entries()].filter(([k, e]) => !marked.has(k) && e.s > 0).sort((a,b) => b[1].s - a[1].s)
         .slice(0, 40).map(([,e]) => searchItem(e.x, e.type));
       // En rad per titel du gett 👍 (de får välja först), och ✨ För dig med resten.
       const shown = new Set(), because = [];
       for (const m of liked){
         const id = m.item.show.tmdbId;
+        const inRow = new Set();
         const list = (recsOf.get(id) || []).filter(x => x.poster_path).map(x => searchItem(x, typeOf(id)))
-          .filter(it => !marked.has(it.show.tmdbId) && !shown.has(it.show.tmdbId));
+          .filter(it => !marked.has(it.show.tmdbId) && !shown.has(it.show.tmdbId) && !inRow.has(it.show.tmdbId) && inRow.add(it.show.tmdbId));
         await fillServices(list);
         const row = list.filter(it => Object.keys(it.added).length).slice(0, 8);
         if (row.length < 2) continue;
@@ -1903,10 +1906,15 @@ async function renderForYou(){
       store.set("forYou", c);
     } finally { forYouBusy = false; }
   }
+  // Varje titel visas bara i en rad, och varje 👍-titel får högst en rad (även för sparade listor från en äldre version).
+  // Raderna "Eftersom du gillade" väljer först, som när listan räknas fram.
+  const onScreen = new Set(), heads = new Set();
   const visible = list => (list || []).filter(it => !markOf("tmdb:"+it.show.tmdbId, it))
-    .filter(it => state.type === "all" || it.show.showType === state.type);
-  const rows = [{ h:"✨ För dig", items:visible(c.items) },
-                ...(c.because || []).map(b => ({ h:`Eftersom du gillade ${esc(b.title)}`, items:visible(b.items), because:true }))]
+    .filter(it => state.type === "all" || it.show.showType === state.type)
+    .filter(it => !onScreen.has(it.show.tmdbId) && onScreen.add(it.show.tmdbId));
+  const because = (c.because || []).filter(b => !heads.has(b.title) && heads.add(b.title))
+    .map(b => ({ h:`Eftersom du gillade ${esc(b.title)}`, items:visible(b.items), because:true }));
+  const rows = [{ h:"✨ För dig", items:visible(c.items) }, ...because]
     .filter(r => r.items.length >= (r.because ? 2 : 1));
   el.innerHTML = "";
   for (const r of rows){
