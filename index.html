@@ -55,6 +55,9 @@
   .searchbar{position:sticky;top:0;background:var(--bg);padding:12px 0 10px;z-index:2}
   .searchbar input{flex:1}
   .item.dim{opacity:.45}
+  .item.lenhide,h3.lenhide{display:none}
+  .lenNote{text-align:center}
+  .lenNote button{background:none;border:0;color:var(--acc,#6aa8ff);text-decoration:underline;padding:0 4px;font:inherit}
   .item{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
   .item img{-webkit-user-drag:none;pointer-events:none}
   .actions a.on{background:var(--acc);color:#111;border-color:var(--acc)}
@@ -126,6 +129,7 @@
 <header>
   <div class="row">
     <h1 id="pageTitle">Nytt att se</h1>
+    <button id="btnLen" class="iconbtn" aria-label="Längd" title="Filtrera på längd" aria-expanded="false" aria-controls="lenChips">⏱</button>
     <button id="btnBell" class="iconbtn" aria-label="Bevakning">🔔<span id="bellBadge" class="badge" style="display:none"></span></button>
     <button id="btnSettings" class="iconbtn" aria-label="Inställningar">⚙︎</button>
   </div>
@@ -136,6 +140,7 @@
     <span style="flex:1"></span>
     <button id="btnFilter">⚙ Filter</button>
   </div>
+  <div class="chips" id="lenChips" role="group" aria-label="Längd" style="display:none"></div>
   <div id="discBar" style="display:none">
     <div class="seg" id="discTabs">
       <button data-disc="top">Topplistor</button>
@@ -430,6 +435,36 @@ function snapshot(it){
                   runtime:s.runtime, seasonCount:s.seasonCount },
            added:it.added, links:it.links, approx:it.approx, search:true };
 }
+// En titel från en gist (din egen eller någon annans i hushållet) med bara kända fält och rätt typer.
+// Allt som kommer utifrån går hit, så att t.ex. speltiden aldrig kan innehålla HTML.
+const TMDB_ID = /^(movie|tv)\/\d+$/;
+function cleanShow(s){
+  if (!s || typeof s !== "object" || typeof s.title !== "string") return null;
+  const tid = TMDB_ID.test(String(s.tmdbId ?? "")) ? s.tmdbId : undefined;
+  const num = v => Number.isFinite(+v) && +v > 0 ? Math.round(+v) : undefined;
+  const str = (v, n) => typeof v === "string" ? v.slice(0, n) : undefined;
+  const img = s.imageSet && typeof s.imageSet === "object" ? s.imageSet : {};
+  const pic = (o, ...ks) => { for (const k of ks){ const u = safeUrl(o?.[k]); if (u) return u; } return undefined; };
+  const vp = pic(img.verticalPoster, "w360", "w240"), bd = pic(img.horizontalBackdrop, "w720") || pic(img.horizontalPoster, "w720");
+  return { showType: tid ? (tid.startsWith("tv/") ? "series" : "movie") : s.showType === "series" ? "series" : "movie", tmdbId:tid,
+           imdbId: /^tt\d+$/.test(String(s.imdbId ?? "")) ? s.imdbId : undefined,
+           title: s.title.slice(0, 300), overview: str(s.overview, 3000),
+           releaseYear:num(s.releaseYear), firstAirYear:num(s.firstAirYear), rating:num(s.rating),
+           runtime:num(s.runtime), seasonCount:num(s.seasonCount),
+           cast: Array.isArray(s.cast) ? s.cast.filter(x => typeof x === "string").map(x => x.slice(0, 100)).slice(0, 6) : [],
+           imageSet:{ verticalPoster: vp ? { w360:vp } : undefined, horizontalBackdrop: bd ? { w720:bd } : undefined } };
+}
+function cleanItem(item){
+  const show = cleanShow(item?.show); if (!show) return null;
+  const it = { show, added:{}, links:{}, approx:{}, search:true }, known = new Set(SERVICES.map(s => s.key));
+  for (const [k, ts] of Object.entries(item.added && typeof item.added === "object" ? item.added : {})){
+    if (!known.has(k)) continue;
+    it.added[k] = Number.isFinite(+ts) ? +ts : 0;
+    const u = safeUrl(item.links?.[k]); if (u) it.links[k] = u;
+    if (item.approx?.[k]) it.approx[k] = true;
+  }
+  return it;
+}
 // rating (bara för "seen"): "up" 👍, "mid" tumme åt sidan, "down" 👎 eller null. Skickas rating med
 // sätts markeringen alltid (byter betyg) i stället för att ångras.
 function setMark(id, it, status, rating){
@@ -663,6 +698,26 @@ function excludedByLanguage(show){
 const latest = it => Math.max(0, ...Object.entries(it.added).filter(([k])=>state.svc.has(k)).map(([,v])=>v));
 // Bara siffror – året kan komma från en synkad gist och skrivs rakt in i HTML.
 const year = s => String(s.releaseYear || s.firstAirYear || "").replace(/\D/g, "");
+// ---------- Längd: speltid för filmer, antal säsonger för serier ----------
+// Saknas längden (t.ex. titlar från TMDB-listor) slås den upp när längdfiltret används och sparas 30 dagar.
+const lenCache = new Map();   // tmdbId -> minuter (film) eller säsonger (serie); 0 = okänt
+const lenOf = s => { const n = Math.round(+(s.showType === "series" ? s.seasonCount : s.runtime)) || lenCache.get(s.tmdbId) || 0;
+                     return n > 0 ? n : 0; };
+function lenText(s, long=false){
+  const n = lenOf(s); if (!n) return "";
+  if (s.showType === "series") return long ? `${n} ${n === 1 ? "säsong" : "säsonger"}` : `${n} säs.`;
+  const h = Math.floor(n / 60), m = n % 60;
+  return long && h ? `${h} h${m ? ` ${m} min` : ""}` : `${n} min`;
+}
+// Kort / mellan / lång: film under 1,5 h, 1,5–2 h, över 2 h – serie med 1 säsong, 2–3, 4 eller fler.
+const LENS = {
+  all:   { all:"⏱ Alla längder", movie:"⏱ Alla längder", series:"⏱ Alla längder" },
+  short: { all:"Kort", movie:"Under 1,5 h", series:"1 säsong", hint:"Film under 1,5 h eller serie med 1 säsong" },
+  mid:   { all:"Mellan", movie:"1,5–2 h", series:"2–3 säsonger", hint:"Film 1,5–2 h eller serie med 2–3 säsonger" },
+  long:  { all:"Lång", movie:"Över 2 h", series:"4+ säsonger", hint:"Film över 2 h eller serie med 4 säsonger eller fler" },
+};
+const lenBucket = (type, n) => !n ? null : type === "series" ? (n <= 1 ? "short" : n <= 3 ? "mid" : "long")
+                                                            : (n <= 90 ? "short" : n <= 120 ? "mid" : "long");
 const poster = s => s.imageSet?.verticalPoster?.w360 || s.imageSet?.verticalPoster?.w240 || "";
 const backdrop = s => s.imageSet?.horizontalBackdrop?.w720 || s.imageSet?.horizontalPoster?.w720 || "";
 const svcLabel = k => SERVICES.find(s=>s.key===k)?.label || esc(k);
@@ -716,12 +771,14 @@ function updateWantChip(){}
 
 function card(id, it){
   const s = it.show, b = document.createElement("button"); b.className="item";
+  b.dataset.tid = s.tmdbId || ""; b.dataset.kind = s.showType === "series" ? "series" : "movie";
+  b.dataset.len = lenOf(s) || "";
   const p = poster(s), keys = Object.keys(it.added);
   const mk = markOf(id, it);
   const flag = mk === "want" ? "⭐" : mk === "seen" ? seenIcon(ratingOf(id, it)) : mk === "hidden" ? "🗑" : "";
   b.innerHTML = `<div class="pwrap">${p ? `<img loading="lazy" alt="" src="${esc(p)}">` : `<div class="ph">${esc(s.title)}</div>`}${flag ? `<span class="flag" role="img" aria-label="${esc(markLabel(mk, ratingOf(id, it)))}">${flag}</span>` : ""}</div>
     <div class="t">${esc(s.title)}</div>
-    <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}${s.rating?` · ★ ${(s.rating/10).toFixed(1)}`:""}</div>
+    <div class="m">${s.showType==="series"?"Serie":"Film"}${year(s)?" · "+year(s):""}<span class="len">${lenText(s) ? " · "+lenText(s) : ""}</span>${s.rating?` · ★ ${(+s.rating/10).toFixed(1)}`:""}</div>
     <div class="badges">${keys.length ? keys.map(k=>`<span class="b ${esc(k)}">${svcLabel(k)}</span>`).join("")
       : it.search ? `<span class="m">${it.pending ? "Kollar…" : "Inte på dina tjänster"}</span>` : ""}</div>`;
   if (it.search && !keys.length && !it.pending) b.classList.add("dim");
@@ -767,15 +824,15 @@ function openQuick(id, it){
   $("quickBody").querySelectorAll("[data-qmark]").forEach(a => a.onclick = e => {
     e.preventDefault();
     const m = a.dataset.qmark, wasOn = mk === m;
-    if (m === "seen"){ closeSheets(); askRating(id, it, () => { render(); redrawOverlays(); }); return; }
+    if (m === "seen"){ closeTop(); askRating(id, it, () => { render(); redrawOverlays(); }); return; }
     setMark(id, it, m);
     toast(wasOn ? "Markeringen borttagen" : { want:"Sparad i Vill se ⭐", seen:"Markerad som sedd ✓", hidden:"Borttagen från listan" }[m]);
-    closeSheets(); render();
+    closeTop(); render();
     redrawOverlays();
   });
-  $("quickInfo").onclick = e => { e.preventDefault(); closeSheets(); openDetail(id, it); };
-  $("quickClose").onclick = e => { e.preventDefault(); closeSheets(); };
-  $("quickBody").querySelector("a.tv")?.addEventListener("click", () => setTimeout(closeSheets, 50));
+  $("quickInfo").onclick = e => { e.preventDefault(); closeTop(); openDetail(id, it); };
+  $("quickClose").onclick = e => { e.preventDefault(); closeTop(); };
+  $("quickBody").querySelector("a.tv")?.addEventListener("click", () => setTimeout(closeTop, 50));
 }
 
 // ---------- Sett: välj betyg (👍 / tumme åt sidan / 👎) ----------
@@ -829,6 +886,9 @@ async function loadExtras(s){
     const j = await tmdbGet("/"+s.tmdbId, { language:"sv-SE", append_to_response:"credits,videos,recommendations,similar,external_ids",
                                            include_video_language:"sv,en,null" });
     const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ name:c.name, role:c.character }));
+    // Längden följer med gratis – spara den för längdfiltret.
+    const n = Math.round(+(s.tmdbId.startsWith("tv/") ? j.number_of_seasons : j.runtime)) || 0;
+    if (n){ lenCache.set(s.tmdbId, n); bigCache.set("len|"+s.tmdbId, { t:Date.now(), n }); }
     const makers = s.tmdbId.startsWith("movie/")
       ? (j.credits?.crew || []).filter(c=>c.job==="Director").map(c=>c.name)
       : (j.created_by || []).map(c=>c.name);
@@ -851,7 +911,7 @@ function openDetail(id,it){
   const buttons = Object.keys(it.added).map(k=> safeUrl(it.links[k])
     ? `<a class="${esc(k)}" href="${esc(safeUrl(it.links[k]))}" target="_blank" rel="noopener">${approx[k] ? `Hitta på ${svcLabel(k)}` : `▶ Öppna i ${svcLabel(k)}`}</a>` : "").join("");
   const addedTxt = Object.entries(it.added).map(([k,ts])=>`${svcLabel(k)} ${new Date(ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"short"})}${approx[k]?" (premiär)":""}`).join(" · ");
-  const extra = s.showType==="series" ? (s.seasonCount?` · ${s.seasonCount} säsonger`:"") : (s.runtime?` · ${s.runtime} min`:"");
+  const extra = lenText(s, true) ? " · " + lenText(s, true) : "";
   document.getElementById("detailBody").innerHTML = `
     ${bd ? `<img class="hero" alt="" src="${esc(bd)}">` : ""}
     <div class="pad">
@@ -863,7 +923,7 @@ function openDetail(id,it){
       ${leavingFor(s.tmdbId).map(x=>`<div class="m leave">⏳ Försvinner från ${esc(svcLabel(x.svc))} ${x.ts ? new Date(x.ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"long"}) : "snart"}</div>`).join("")}
       <div id="ratings" class="m"></div>
       <p id="overview">${esc((meta[s.tmdbId]?.sv) || s.overview || "")}</p>
-      <div id="people" class="m">${s.cast?.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
+      <div id="people" class="m">${Array.isArray(s.cast) && s.cast.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
       <div class="actions">
         <span id="trailerSlot" style="display:contents"></span>
         ${tvButtons(it)}
@@ -883,7 +943,7 @@ function openDetail(id,it){
   $("detail").dataset.cur = s.tmdbId || "";
   if (cfg.tmdbKey && s.tmdbId) $("similar").innerHTML = `<h3>Liknande på dina tjänster</h3><p class="m">Letar…</p>`;
   document.getElementById("detail").classList.add("open");
-  document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeSheets(); };
+  document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeTop(); };
   document.querySelectorAll("#detailBody [data-mark]").forEach(a => a.onclick = e => {
     e.preventDefault();
     const wasOn = a.classList.contains("on");
@@ -893,7 +953,7 @@ function openDetail(id,it){
     toast(wasOn ? "Markeringen borttagen" : { want:"Sparad i Vill se ⭐", seen:"Markerad som sedd ✓", hidden:"Borttagen från listan" }[a.dataset.mark]);
     render();
     redrawOverlays();
-    if (!wasOn && a.dataset.mark !== "want") setTimeout(closeSheets, 400);
+    if (!wasOn && a.dataset.mark !== "want") setTimeout(() => { if (topSheet()?.id === "detail") closeTop(); }, 400);
   });
   loadExtras(s).then(ex=>{
     if (!ex || !document.getElementById("detail").classList.contains("open")) return;
@@ -1914,6 +1974,7 @@ async function syncNow(){
     for (const [k, v] of Object.entries(remote)){
       if (!v || typeof v !== "object") continue;
       if ("rating" in v && !validRating(v.rating)) delete v.rating;   // okända betyg från gisten ignoreras
+      if ("item" in v){ const it = cleanItem(v.item); if (it) v.item = it; else delete v.item; }   // bara kända fält och typer
       if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
     }
     const diff = (a, b) => Object.keys(a).some(k => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
@@ -1961,7 +2022,7 @@ async function openChangelog(){
   }catch(e){
     $("changelogBody").innerHTML = `<h2>📜 Vad är nytt</h2><p class="m">${esc(e.message)}</p><div class="actions"><a href="#" id="closeChangelog">Stäng</a></div>`;
   }
-  $("closeChangelog").onclick = ev => { ev.preventDefault(); closeSheets(); };
+  $("closeChangelog").onclick = ev => { ev.preventDefault(); closeTop(); };
 }
 $("openChangelog").onclick = e => { e.preventDefault(); openChangelog(); };
 // Prick på ⚙︎ när det finns ändringar du inte sett. Första gången räknas allt som sett.
@@ -2034,7 +2095,115 @@ document.querySelectorAll("#typeChips [data-type]").forEach(b=>b.onclick=()=>{
   render();
   if (state.tab === "disc") openDisc(disc.tab);
   if (state.tab === "lists") renderLists();
+  drawLenChips();
 });
+
+// ---------- Längdfilter ----------
+// Gäller alla flikar utom Sök. Filtret döljer korten i stället för att varje vy filtrerar själv,
+// så att det fungerar likadant i Nytt, För dig, Upptäck och Mina listor.
+state.len = LENS[store.get("len", "all")] ? store.get("len", "all") : "all";
+let lenOpen = state.len !== "all";
+function drawLenChips(){
+  const t = state.type, row = $("lenChips"), btn = $("btnLen");
+  row.innerHTML = Object.entries(LENS).map(([k, l]) =>
+    `<button data-len="${k}" class="${k === state.len ? "on" : ""}" aria-pressed="${k === state.len}"${l.hint && t === "all" ? ` title="${esc(l.hint)}"` : ""}>${esc(l[t])}</button>`).join("");
+  row.querySelectorAll("[data-len]").forEach(b => b.onclick = () => setLen(b.dataset.len));
+  row.style.display = lenOpen && state.tab !== "search" ? "" : "none";
+  btn.style.display = state.tab === "search" ? "none" : "";
+  btn.classList.toggle("on", state.len !== "all");
+  btn.setAttribute("aria-label", state.len === "all" ? "Längd" : "Längd: " + LENS[state.len][t]);
+  btn.setAttribute("aria-expanded", String(lenOpen));
+}
+function setLen(k){
+  state.len = LENS[k] ? k : "all"; store.set("len", state.len);
+  if (state.len === "all") lenOpen = false;
+  drawLenChips(); applyLen();
+}
+// Första trycket visar valen; nästa tryck stänger dem (och slår av filtret om det var på).
+$("btnLen").onclick = () => {
+  if (!lenOpen){ lenOpen = true; drawLenChips(); $("lenChips").querySelector(".on")?.focus(); }
+  else if (state.len !== "all") setLen("all");
+  else { lenOpen = false; drawLenChips(); }
+};
+drawLenChips();
+const LEN_SCOPES = ["forYou", "list", "topResults", "upResults", "tipsResults", "soonResults", "listGrid"];
+const lenQueue = new Set(), lenTried = new Set();
+let lenBusy = 0, lenTimer = 0;
+function applyLen(){
+  clearTimeout(lenTimer); lenTimer = 0;
+  const want = state.len;
+  for (const id of LEN_SCOPES){
+    const root = $(id); if (!root) continue;
+    let hidden = 0, waiting = 0, unknown = 0;
+    root.querySelectorAll(".item").forEach(c => {
+      let hide = false;
+      if (want !== "all"){
+        const n = +(c.dataset.len || 0) || lenCache.get(c.dataset.tid) || 0;
+        const b = lenBucket(c.dataset.kind, n);
+        if (b) hide = b !== want;
+        else {
+          hide = true;
+          const tid = c.dataset.tid;
+          if (cfg.tmdbKey && TMDB_ID.test(tid) && !lenTried.has(tid)){ lenQueue.add(tid); waiting++; } else unknown++;
+        }
+      }
+      if (hide) hidden++;
+      if (c.classList.contains("lenhide") !== hide) c.classList.toggle("lenhide", hide);
+    });
+    // Rubriker utan synliga kort döljs (dagar i Nytt, grupper i Försvinner, rader i För dig och Tillsammans).
+    root.querySelectorAll("h3").forEach(hd => {
+      let cards = [];
+      const nx = hd.nextElementSibling;
+      if (nx && (nx.classList.contains("grid") || nx.classList.contains("hrow"))) cards = [...nx.querySelectorAll(".item")];
+      else for (let el = nx; el && el.tagName !== "H3"; el = el.nextElementSibling) if (el.classList.contains("item")) cards.push(el);
+      const hide = want !== "all" && cards.length > 0 && cards.every(c => c.classList.contains("lenhide"));
+      if (hd.classList.contains("lenhide") !== hide) hd.classList.toggle("lenhide", hide);
+    });
+    let note = root.nextElementSibling?.classList.contains("lenNote") ? root.nextElementSibling : null;
+    const text = !hidden ? "" : waiting ? `Kollar längden på ${waiting} ${waiting === 1 ? "titel" : "titlar"}…`
+      : `⏱ ${hidden} ${hidden === 1 ? "titel" : "titlar"} dolda av längdfiltret${unknown ? ` (${unknown} med okänd längd)` : ""}.`;
+    if (!text){ if (note) note.remove(); continue; }
+    if (!note){ note = document.createElement("p"); note.className = "tip lenNote"; note.setAttribute("aria-live", "polite"); root.after(note); }
+    if (note.dataset.txt !== text){
+      note.dataset.txt = text;
+      note.innerHTML = `${esc(text)} <button type="button">Visa alla längder</button>`;
+      note.querySelector("button").onclick = () => setLen("all");
+    }
+  }
+  pumpLen();
+}
+// Slår upp längden på titlar som saknar den (4 åt gången) och visar korten igen när svaret kommit.
+function pumpLen(){
+  while (lenBusy < 4 && lenQueue.size){
+    const tid = lenQueue.values().next().value; lenQueue.delete(tid);
+    if (lenTried.has(tid)) continue;
+    lenTried.add(tid); lenBusy++;
+    lookupLen(tid).finally(() => { lenBusy--; lenChanged(tid); pumpLen(); });
+  }
+}
+async function lookupLen(tid){
+  try{
+    const c = await bigCache.get("len|"+tid);
+    if (c && Date.now() - c.t < 30*864e5){ lenCache.set(tid, +c.n || 0); return; }
+    const r = await tmdbGet("/"+tid);
+    const n = Math.round(+(tid.startsWith("tv/") ? r.number_of_seasons : r.runtime)) || 0;
+    lenCache.set(tid, n); bigCache.set("len|"+tid, { t:Date.now(), n });
+  }catch{ lenCache.set(tid, lenCache.get(tid) || 0); }
+}
+function lenChanged(tid){
+  const n = lenCache.get(tid) || 0;
+  if (n) document.querySelectorAll(`.item[data-tid="${CSS.escape(tid)}"]`).forEach(c => {
+    if (!+c.dataset.len) c.dataset.len = n;
+    const sp = c.querySelector(".len");
+    if (sp && !sp.textContent) sp.textContent = " · " + lenText({ showType:c.dataset.kind, tmdbId:tid });
+  });
+  if (!lenTimer) lenTimer = setTimeout(applyLen, 60);
+}
+// Kör filtret när någon vy ritar om sina kort (ändringar i själva notisen räknas inte).
+new MutationObserver(ms => {
+  if (lenTimer || !ms.some(m => !m.target.closest?.(".lenNote") && [...m.addedNodes].some(n => n.nodeType === 1 && !n.classList.contains("lenNote")))) return;
+  lenTimer = setTimeout(applyLen, 0);
+}).observe(document.querySelector("main"), { childList:true, subtree:true });
 
 // ---------- Flikar: Nytt, Upptäck, Mina listor, Sök ----------
 const disc = Object.assign({ tab:"top", svc:"all" }, store.get("disc", {}));
@@ -2049,6 +2218,7 @@ function showTab(t){
   $("pageTitle").textContent = TITLES[t];
   $("typeChips").style.display = t === "search" ? "none" : "";
   $("btnFilter").style.display = t === "new" ? "" : "none";
+  drawLenChips();
   $("discBar").style.display = t === "disc" ? "" : "none";
   $("listBar").style.display = t === "lists" ? "" : "none";
   $("searchBar").style.display = t === "search" ? "" : "none";
@@ -2118,7 +2288,7 @@ function saveHousehold(){ store.set("household", household); renderLists(); }
 // Hämtar en persons Vill se (bara det – Sett och betyg sparas inte). Sparas en halvtimme.
 async function hhWants(h, force=false){
   const key = "hh|"+h.code, c = await bigCache.get(key);
-  if (!force && c && Date.now() - c.t < 30*6e4) return c.wants;
+  if (!force && c && Date.now() - c.t < 30*6e4) return cleanWants(c.wants);
   const r = await fetch("https://api.github.com/gists/"+encodeURIComponent(h.code), { headers:{ Accept:"application/vnd.github+json",
     ...(cfg.ghToken ? { Authorization:"Bearer "+cfg.ghToken } : {}) } });
   if (r.status === 404) throw new Error(`Hittade ingen lista för ${h.name} – kontrollera koden.`);
@@ -2128,14 +2298,20 @@ async function hhWants(h, force=false){
   const raw = safeUrl(f.raw_url);
   const txt = f.truncated && raw.startsWith("https://gist.githubusercontent.com/") ? await (await fetch(raw)).text() : f.content;
   let all = {}; try{ all = JSON.parse(txt).marks || {}; }catch{}
-  const wants = {};
-  for (const [k, v] of Object.entries(all))
-    if (v && v.status === "want" && v.item?.show?.tmdbId && typeof v.item.show.title === "string")
-      wants[k] = { t:+v.t || 0, item:{ show:v.item.show, added:v.item.added || {}, links:v.item.links || {}, approx:v.item.approx || {}, search:true } };
+  const wants = cleanWants(Object.fromEntries(Object.entries(all).filter(([, v]) => v && v.status === "want")));
   bigCache.set(key, { t:Date.now(), wants });
   return wants;
 }
-let togetherSeq = 0;
+// Någon annans Vill se: bara titlar som klarar cleanItem (inga okända fält, ingen HTML i talen).
+function cleanWants(all){
+  const wants = {};
+  for (const [k, v] of Object.entries(all && typeof all === "object" ? all : {})){
+    const item = cleanItem(v?.item);
+    if (item?.show.tmdbId) wants[k] = { t:+v.t || 0, item };
+  }
+  return wants;
+}
+let togetherSeq = 0, togetherIO = null;
 async function renderTogether(force=false){
   const seq = ++togetherSeq, g = $("listGrid"), st = $("listStatus");
   if (g.dataset.tab !== "together" || force){ g.innerHTML = ""; st.style.display = ""; st.textContent = "Hämtar hushållets listor…"; }
@@ -2155,27 +2331,46 @@ async function renderTogether(force=false){
   g.innerHTML = "";
   const whoTxt = e => e.who.map(w => w === ME ? "Du" : w).join(" + ");
   const withWho = (c, e) => { c.insertAdjacentHTML("beforeend", `<div class="who">${esc(whoTxt(e))}</div>`); return c; };
-  const refresh = [];   // titlar vars tjänster slås upp på nytt (dina tjänster, inte de som sparades i gisten)
+  // Titlar som finns i nyhetsflödet visas därifrån (med aktuella tjänster). Slås upp en gång, inte per titel.
+  const liveByKey = new Map();
+  for (const [id, it] of state.shows) { const k = markKey(id, it); if (!liveByKey.has(k)) liveByKey.set(k, [id, it]); }
+  // Övriga titlars tjänster slås upp på nytt (dina tjänster, inte de som sparades i gisten) –
+  // men bara när kortet syns, så att långa listor inte kostar ett TMDB-anrop per titel direkt.
+  togetherIO?.disconnect();
+  const pend = new Map(), queue = [];
+  let busy = 0;
+  const pump = () => {
+    while (busy < 6 && queue.length){
+      const r = queue.shift(); busy++;
+      refreshServices(r.it).finally(() => {
+        busy--;
+        if (seq === togetherSeq && r.c.isConnected) r.c.replaceWith(withWho(card(r.k, r.it), r.e));
+        if (seq === togetherSeq) pump();
+      });
+    }
+  };
+  const io = togetherIO = "IntersectionObserver" in window ? new IntersectionObserver(ents => {
+    for (const en of ents) if (en.isIntersecting){ io.unobserve(en.target); const r = pend.get(en.target); if (r){ pend.delete(en.target); queue.push(r); } }
+    pump();
+  }, { rootMargin:"400px 0px" }) : null;
   const section = (h, list) => {
     if (!list.length) return;
     g.insertAdjacentHTML("beforeend", `<h3 class="sec">${h}</h3>`);
     for (const [k, e] of list){
-      const live = [...state.shows.entries()].find(([id, it]) => markKey(id, it) === k);
+      const live = liveByKey.get(k);
       if (live){ g.appendChild(withWho(card(live[0], live[1]), e)); continue; }
       const it = myServicesOnly(e.item), c = withWho(card(k, it), e);
       g.appendChild(c);
-      if (it.pending) refresh.push({ k, e, it, c });
+      if (!it.pending) continue;
+      const r = { k, e, it, c };
+      if (io){ pend.set(c, r); io.observe(c); } else queue.push(r);
     }
   };
   section("👥 Vill ni båda se", both);
   section("Andra i hushållet vill se", others);
   st.style.display = both.length || others.length ? (errs.length ? "" : "none") : "";
   st.textContent = errs.length ? errs.join(" ") : both.length || others.length ? "" : "Inget gemensamt än. När ni ⭐-märkar samma titel hamnar den här.";
-  for (let i = 0; i < refresh.length; i += 12){
-    await Promise.all(refresh.slice(i, i + 12).map(r => refreshServices(r.it)));
-    if (seq !== togetherSeq) return;
-    refresh.slice(i, i + 12).forEach(r => { if (r.c.isConnected) r.c.replaceWith(withWho(card(r.k, r.it), r.e)); });
-  }
+  pump();
 }
 // En sparad titel (egen eller från någon i hushållet) med bara dina tjänster kvar.
 // Tjänsterna i en sparad markering kan vara gamla, eller gälla någon annans abonnemang.
@@ -2231,7 +2426,7 @@ function renderHousehold(){
 // Bevakning: klockan högst upp
 function updateBell(n){ const b = $("bellBadge"); b.textContent = n; b.style.display = n ? "" : "none"; }
 $("btnBell").onclick = () => { renderAlerts(); $("alertsSheet").classList.add("open"); };
-$("closeAlerts").onclick = e => { e.preventDefault(); closeSheets(); };
+$("closeAlerts").onclick = e => { e.preventDefault(); closeTop(); };
 $("clearAlerts").onclick = e => { e.preventDefault(); alerts.forEach(a => a.done = true); store.set("alerts", alerts); renderAlerts(); };
 
 // Filter (bara fliken Nytt)
@@ -2252,7 +2447,7 @@ $("fApply").onclick = e => { e.preventDefault();
   state.svc = new Set([...document.querySelectorAll("#fSvcs input:checked")].map(x => x.value));
   closeSheets(); updateYearBtn(); load(); };
 $("fRefresh").onclick = e => { e.preventDefault(); closeSheets(); load(true); };
-$("fClose").onclick = e => { e.preventDefault(); closeSheets(); };
+$("fClose").onclick = e => { e.preventDefault(); closeTop(); };
 updateYearBtn();
 
 // Dra nedåt högst upp i Nytt för att hämta nytt.
@@ -2282,7 +2477,7 @@ $("btnSettings").onclick = ()=>{
   renderTvSection(); renderHousehold();
   if (store.get("syncMsg", null) && cfg.ghToken) $("syncStatus").textContent = store.get("syncMsg");
   $("settings").classList.add("open"); };
-$("closeSettings").onclick = e=>{ e.preventDefault(); closeSheets(); };
+$("closeSettings").onclick = e=>{ e.preventDefault(); closeTop(); };
 $("saveSettings").onclick = e=>{ e.preventDefault();
   const prev = cfg;
   cfg = { saKey:$("saKey").value.trim(), saSource:$("saSource").value, tmdbKey:$("tmdbKey").value.trim(),
@@ -2313,7 +2508,13 @@ document.addEventListener("visibilitychange", () => {
 // Rensa gamla rekommendationer, tjänstuppslag och hushållslistor en gång per dygn.
 if (store.get("pruneDay", "") !== dayKey()){
   store.set("pruneDay", dayKey());
-  setTimeout(() => bigCache.prune(["prov|", "recs|", "hh|"], (k, v) => !(v && Date.now() - v.t < 2*864e5)), 5000);
+  setTimeout(() => bigCache.prune(["prov|", "recs|", "hh|", "len|"],
+    (k, v) => !(v && Date.now() - v.t < (k.startsWith("len|") ? 30 : 2)*864e5)), 5000);
+}
+// Markeringar som synkades in innan cleanItem fanns rensas en gång.
+if (!store.get("cleanMarks1", false)){
+  for (const v of Object.values(marks)) if (v && typeof v === "object" && "item" in v){ const it = cleanItem(v.item); if (it) v.item = it; else delete v.item; }
+  store.set("marks", marks); store.set("cleanMarks1", true);
 }
 </script>
 </body>

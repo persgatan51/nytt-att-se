@@ -44,10 +44,12 @@ def tmdb(route):
         body={"results":[mk(i) for i in range(start,start+12)]}
     elif re.match(r"^/tv/\d+$", path):
         fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*20))
-        body={"overview":"Svensk","next_episode_to_air":{"episode_number":1,"season_number":4,"air_date":fut},"last_episode_to_air":{"season_number":3},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
+        n=int(path.split("/")[2])
+        body={"number_of_seasons":1+n%5,"overview":"Svensk","next_episode_to_air":{"episode_number":1,"season_number":4,"air_date":fut},"last_episode_to_air":{"season_number":3},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
               "recommendations":{"results":[mk(i) for i in range(200,210)]},"external_ids":{"imdb_id":"tt999"}}
     elif re.match(r"^/movie/\d+$", path):
-        body={"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[],"crew":[]},"videos":{"results":[]},
+        n=int(path.split("/")[2])
+        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[],"crew":[]},"videos":{"results":[]},
               "recommendations":{"results":[mk(i) for i in range(200,210)]}}
     else: body={}
     route.fulfill(status=200, body=json.dumps(body), content_type="application/json")
@@ -83,6 +85,8 @@ def github(route):
         body={"files":{"nytt-att-se.json":{"truncated":False,"content":json.dumps({"v":1,"marks":{
             "movie/705":{"status":"want","t":5,"item":{"show":{"showType":"movie","tmdbId":"movie/705","title":"Båda vill se","imageSet":{}},"added":{},"links":{}}},
             "movie/706":{"status":"want","t":6,"item":{"show":{"showType":"movie","tmdbId":"movie/706","title":"Anna vill se","imageSet":{}},"added":{"hbo":0},"links":{"hbo":"https://play.max.com/x"}}},
+            "movie/711":{"status":"want","t":8,"item":{"show":{"showType":"movie","tmdbId":"movie/711","title":"Elak gist","runtime":"<img src=x onerror=\"window.__xss=1\">",
+                "seasonCount":"<b>x</b>","cast":"inte en lista","imageSet":{"verticalPoster":{"w360":"javascript:alert(1)"}}},"added":{"netflix":"<i>"},"links":{"netflix":"javascript:alert(1)"}}},
             "movie/707":{"status":"seen","rating":"down","t":7,"item":{"show":{"showType":"movie","tmdbId":"movie/707","title":"Anna har sett","imageSet":{}},"added":{},"links":{}}}}})}}}
     elif r.url.endswith("/gists?per_page=100&page=1"): body=[{"id":"g1","files":{"nytt-att-se.json":{}}}] if gist["content"] else []
     elif m == "POST" or m == "PATCH":
@@ -298,6 +302,55 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.fill("#hhName", "Du"); pg.fill("#hhCodeIn", "2123456789abcdef0123456789abcdef"); pg.click("#hhAdd")
     check(pg.evaluate("household.map(h => h.name).join(',')") == "Anna,Bo,anna 2,Du 2", "namnen i hushållet blir unika")
     pg.evaluate("closeSheets()")
+
+    # Data från någon annans gist kan inte köra skript, och en trasig cast stoppar inte detaljvyn.
+    pg.evaluate("closeSheets(); showTab('lists'); lists.tab = 'together'; renderTogether(true)"); pg.wait_for_timeout(800)
+    elak = pg.evaluate("""async () => { const w = await hhWants({ name:'Anna', code:'%s' }); return w['movie/711']?.item; }""" % HH_CODE)
+    check(elak and "runtime" not in {k for k, v in elak["show"].items() if v is not None} and elak["show"]["cast"] == []
+          and not elak["links"] and elak["added"] == {"netflix": 0} and not (elak["show"]["imageSet"].get("verticalPoster")),
+          f"hushållsdata rensas till kända fält och typer ({elak})")
+    pg.locator("#listGrid .item", has_text="Elak gist").click(); pg.wait_for_timeout(300)
+    check(pg.evaluate("$('detail').classList.contains('open') && !window.__xss"), "titel från elak gist öppnas utan att köra skript")
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/713', title:'Rå', runtime:'<img src=x onerror="window.__xss=2">',
+        cast:'sträng', imageSet:{} }, added:{}, links:{}, approx:{} })"""); pg.wait_for_timeout(300)
+    check(pg.evaluate("!window.__xss && $('detailBody').querySelector('h2').textContent === 'Rå'"), "detaljvyn skriver aldrig ut speltid som HTML")
+    pg.evaluate("closeSheets()")
+
+    # ✕ stänger bara den översta rutan.
+    pg.click("#btnSettings"); pg.wait_for_timeout(100)
+    pg.evaluate("openDetail('x', { show:{ showType:'movie', tmdbId:'movie/714', title:'Ovanpå', imageSet:{} }, added:{}, links:{}, approx:{} })")
+    pg.wait_for_timeout(100); pg.click("#closeDetail"); pg.wait_for_timeout(100)
+    check(pg.evaluate("!$('detail').classList.contains('open') && !!topSheet()"), "✕ i detaljvyn stänger bara detaljvyn")
+    pg.evaluate("closeSheets()")
+
+    # Längdfilter: döljer kort med fel längd, slår upp längd som saknas och sparar den.
+    pg.evaluate("showTab('new')"); pg.wait_for_timeout(300)
+    total = pg.locator("#list .item").count()
+    pg.click("#btnLen"); pg.wait_for_timeout(100)
+    check(pg.locator("#lenChips [data-len]").count() == 4 and pg.locator("#lenChips").is_visible(), "Längd visar fyra val")
+    pg.click("#lenChips [data-len='short']"); pg.wait_for_timeout(1500)
+    vis = pg.evaluate("[...document.querySelectorAll('#list .item:not(.lenhide)')].map(c => +c.dataset.len)")
+    hid = pg.locator("#list .item.lenhide").count()
+    check(total > 0 and vis and all(0 < n <= 90 for n in vis) and hid > 0 and len(vis) + hid == total,
+          f"Kort visar bara filmer under 1,5 h ({vis}, {hid} dolda av {total})")
+    check("dolda av längdfiltret" in pg.locator("#list + .lenNote").inner_text(), "notis om dolda titlar")
+    check(" · 80 min" in pg.locator("#list .item:not(.lenhide) .m").first.inner_text(), "korten visar speltiden")
+    check(pg.locator("#btnLen").get_attribute("aria-label") == "Längd: Kort" and "on" in pg.locator("#btnLen").get_attribute("class") and pg.evaluate("localStorage.len") == '"short"', "valet syns på knappen och sparas")
+    lc = sum(1 for c in calls if re.match(r"^/movie/\d+$", c))
+    pg.click("#lenChips [data-len='long']"); pg.wait_for_timeout(500)
+    vis = pg.evaluate("[...document.querySelectorAll('#list .item:not(.lenhide)')].map(c => +c.dataset.len)")
+    lc2 = sum(1 for c in calls if re.match(r"^/movie/\d+$", c))
+    check(vis and all(n > 120 for n in vis if n > 5) and lc2 == lc,
+          f"byte av längd slår inte upp längderna igen ({vis}, anrop {lc} → {lc2})")
+    pg.click("#typeChips [data-type='series']"); pg.wait_for_timeout(100)
+    check(pg.locator("#lenChips [data-len='long']").inner_text() == "4+ säsonger", "valen visar säsonger för serier")
+    pg.click("#typeChips [data-type='all']")
+    pg.locator("#list + .lenNote button").click(); pg.wait_for_timeout(200)
+    check(pg.locator("#list .item.lenhide").count() == 0 and not pg.locator("#lenChips").is_visible() and pg.evaluate("state.len") == "all",
+          "Visa alla längder slår av filtret")
+    pg.evaluate("showTab('search')")
+    check(not pg.locator("#btnLen").is_visible(), "längdfiltret gäller inte i Sök")
+    pg.evaluate("showTab('new')")
 
     # Rensningen tar bara gamla poster med rätt prefix.
     pg.evaluate("""async () => { await bigCache.set('recs|movie/1', { t:0, results:[] }); await bigCache.set('recs|movie/2', { t:Date.now(), results:[] });

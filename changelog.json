@@ -1,5 +1,24 @@
 [
   {
+    "date": "2026-11-19",
+    "title": "Filtrera på längd",
+    "changes": [
+      "Tryck på ⏱ högst upp och välj Kort, Mellan eller Lång för att hitta något som passar kvällen. För filmer betyder det under 1,5 h, 1,5–2 h eller över 2 h, och för serier 1 säsong, 2–3 säsonger eller 4 eller fler.",
+      "Filtret gäller i Nytt, För dig, Upptäck och Mina listor, och appen kommer ihåg ditt val.",
+      "Korten visar nu speltiden för filmer och antalet säsonger för serier."
+    ]
+  },
+  {
+    "date": "2026-11-19",
+    "title": "Buggrättningar",
+    "changes": [
+      "Säkrare Tillsammans: titlar från andra i hushållet kan inte längre innehålla något som körs i appen eller styr din TV.",
+      "En titel med trasig information öppnas nu ändå i stället för att ingenting händer.",
+      "✕ stänger bara rutan du har framför dig, precis som bakåtknappen.",
+      "👥 Tillsammans laddar snabbare, eftersom appen bara kollar tjänsterna för titlarna du ser på skärmen."
+    ]
+  },
+  {
     "date": "2026-11-18",
     "title": "Buggrättningar",
     "changes": [
