@@ -1856,7 +1856,7 @@ async function renderForYou(){
   const rated = m => validRating(m.rating);
   const base = recent.filter(m => rated(m) !== "down").slice(0, 8);
   const neg = recent.filter(m => rated(m) === "down").slice(0, 6);
-  const liked = recent.filter(m => m.status === "seen" && rated(m) === "up").slice(0, 3);   // "Eftersom du gillade …"
+  const liked = recent.filter(m => m.status === "seen" && rated(m) === "up").slice(0, 1);   // "Eftersom du gillade …" – bara den senaste
   if (!base.length){ el.innerHTML = ""; return; }
   const weight = m => m.status === "want" ? 1.2 : ({ up:1.6, mid:0.5, down:-1 })[rated(m)] ?? 1;
   const sig = [...base, ...neg].map(m => m.item.show.tmdbId + ":" + (rated(m) || "")).join(",") + "|" +

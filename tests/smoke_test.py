@@ -270,14 +270,14 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check(rc2 == rc and "Eftersom du gillade Gillad film" not in pg.locator("#forYou h3").all_inner_texts(),
           f"ändrat betyg hämtar inga nya rekommendationer ({rc} → {rc2})")
 
-    # Samma 👍-titel sparad under två nycklar ger bara en rad, och ingen titel visas två gånger i För dig.
+    # Bara den senaste 👍-titeln får en rad (även om en titel sparats under två nycklar), och ingen titel visas två gånger i För dig.
     pg.evaluate("""() => { setMark('x', marks['movie/703'].item, 'seen', 'up');
-        marks['sa703'] = { ...marks['movie/703'], t:Date.now() + 5 };
-        setMark('x', { show:{ showType:'movie', tmdbId:'movie/712', title:'Annan gillad', imageSet:{} }, added:{}, links:{} }, 'seen', 'up'); }""")
+        marks['sa703'] = { ...marks['movie/703'] };
+        setMark('x', { show:{ showType:'movie', tmdbId:'movie/712', title:'Annan gillad', imageSet:{} }, added:{}, links:{} }, 'seen', 'up'); marks['movie/712'].t += 1000; }""")
     pg.evaluate("renderForYou()"); pg.wait_for_timeout(1500)
     heads = pg.locator("#forYou h3").all_inner_texts()
     ids = pg.evaluate("[...document.querySelectorAll('#forYou .item')].map(c => c.dataset.tid)")
-    check(heads.count("Eftersom du gillade Gillad film") == 1 and "Eftersom du gillade Annan gillad" in heads, f"en rad per gillad titel ({heads})")
+    check(sum(h.startswith("Eftersom du gillade") for h in heads) == 1 and "Eftersom du gillade Annan gillad" in heads, f"bara en rad Eftersom du gillade, för den senaste 👍 ({heads})")
     check(len(ids) > 0 and len(ids) == len(set(ids)), f"ingen titel visas två gånger i För dig ({len(ids)} kort, {len(set(ids))} olika)")
     pg.evaluate("delete marks['sa703']; store.set('marks', marks)")
 

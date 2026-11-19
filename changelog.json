@@ -1,6 +1,13 @@
 [
   {
     "date": "2026-11-19",
+    "title": "Färre rader på startsidan",
+    "changes": [
+      "Eftersom du gillade visas nu bara för den titel du senast gav 👍, i stället för tre rader efter varandra."
+    ]
+  },
+  {
+    "date": "2026-11-19",
     "title": "Buggrättningar",
     "changes": [
       "Samma film visas inte längre flera gånger i ✨ För dig och Eftersom du gillade.",
