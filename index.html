@@ -123,6 +123,27 @@
   .cl ul{margin:6px 0 0;padding-left:20px}
   .cl li{margin:4px 0}
   .cl .new{background:var(--acc);color:#111;border-radius:6px;padding:0 6px;font-size:11px;font-weight:700;margin-left:6px}
+  #btnQuiz.dot::after{content:"";position:absolute;top:3px;right:3px;width:9px;height:9px;border-radius:50%;background:var(--acc)}
+  .qtop{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:13px;margin-bottom:10px}
+  .qdots{display:flex;gap:5px}
+  .qdots i{width:9px;height:9px;border-radius:50%;background:var(--line);display:block}
+  .qdots i.cur{background:var(--fg)}.qdots i.ok{background:#2fb36d}.qdots i.bad{background:#d9534f}
+  .qposter{width:52%;max-width:220px;margin:0 auto;aspect-ratio:2/3;border-radius:12px;overflow:hidden;background:var(--card)}
+  .qposter img{width:100%;height:100%;object-fit:cover;display:block;transition:filter .4s,transform .4s}
+  .qclues{margin:12px 0 4px;display:flex;flex-direction:column;gap:6px}
+  .qclue{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:14px}
+  .qopts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+  .qopts button{border-radius:12px;padding:12px 8px;min-height:54px;line-height:1.25}
+  .qopts button:disabled{cursor:default;color:var(--fg)}
+  .qopts button:disabled:not(.ok):not(.bad){opacity:.45}
+  .qopts button.ok{background:#1b7f4b;border-color:#1b7f4b;color:#fff;font-weight:600}
+  .qopts button.bad{background:#8a2a2a;border-color:#8a2a2a;color:#fff}
+  .qres{text-align:center;font-size:18px;font-weight:700;margin:12px 0 2px}
+  .qbig{font-size:44px;font-weight:800;text-align:center;margin:6px 0 0}
+  .qstats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:14px 0}
+  .qstats div{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 4px;text-align:center;font-size:12px;color:var(--mut)}
+  .qstats b{display:block;font-size:20px;color:var(--fg)}
+  #quizBody h3{text-transform:none}
 </style>
 </head>
 <body>
@@ -130,6 +151,7 @@
   <div class="row">
     <h1 id="pageTitle">Nytt att se</h1>
     <button id="btnLen" class="iconbtn" aria-label="Längd" title="Filtrera på längd" aria-expanded="false" aria-controls="lenChips">⏱</button>
+    <button id="btnQuiz" class="iconbtn" aria-label="Filmquiz" title="Dagens filmquiz">🎬</button>
     <button id="btnBell" class="iconbtn" aria-label="Bevakning">🔔<span id="bellBadge" class="badge" style="display:none"></span></button>
     <button id="btnSettings" class="iconbtn" aria-label="Inställningar">⚙︎</button>
   </div>
@@ -259,6 +281,8 @@
 </div></div></div>
 
 <div class="sheet" id="quick"><div class="panel"><div class="pad" id="quickBody"></div></div></div>
+
+<div class="sheet" id="quiz"><div class="panel"><div class="pad" id="quizBody"></div></div></div>
 
 <div class="sheet" id="changelog"><div class="panel"><div class="pad" id="changelogBody"></div></div></div>
 
@@ -2490,12 +2514,208 @@ $("saveSettings").onclick = e=>{ e.preventDefault();
   // Ladda om från API:t bara om nycklarna ändrats – annars räcker cachen (sparar anrop).
   load(prev.saKey!==cfg.saKey || prev.saSource!==cfg.saSource || (cfg.source==="tmdb" && prev.tmdbKey!==cfg.tmdbKey));
   if (cfg.ghToken && cfg.ghToken !== prev.ghToken){ store.set("gistId", null); syncNow(); }
-  exportWatch(); };
+  exportWatch(); updateQuizDot(); };
 $("syncNowBtn").onclick = e => { e.preventDefault(); if (!$("ghToken").value.trim()) return setSyncStatus("Klistra in en GitHub-token och tryck Spara först."); syncNow(); };
 $("watchNowBtn").onclick = async e => { e.preventDefault(); toast("Kollar bevakningen…");
   await runWatch(true);
   try{ TV && typeof TV.checkWatchNow === "function" && TV.checkWatchNow(); }catch{}
   if (!alerts.some(a => !a.done)) toast("Inget nytt i bevakningen just nu."); };
+
+// ---------- 🎬 Filmquiz: gissa titeln från en suddig affisch ----------
+// En runda per dag med titlar från dina tjänster. Varje ledtråd gör affischen skarpare men ger en poäng mindre.
+// Extrarundor går att spela hur många som helst men räknas inte i statistiken.
+const QUIZ_N = 5, QUIZ_BLUR = [26, 15, 8, 3];
+const QUIZ_STOP = new Set(["från","över","till","efter","under","inte","utan","med","with","from","that","this","into","about","the","och"]);
+let quiz = store.get("quiz", null);   // { day, extra, items, idx, clues, answers:[{ pick, clues, pts }] }
+let quizStats = Object.assign({ last:"", streak:0, best:0, days:0, total:0 }, store.get("quizStats", {}));
+let quizBusy = false;
+const prevDay = d => { const x = new Date(d + "T12:00:00"); x.setDate(x.getDate() - 1); return x.toLocaleDateString("sv-SE"); };
+const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const quizDone = q => q && q.idx >= q.items.length;
+const quizScore = q => q.answers.reduce((s, x) => s + (x?.pts || 0), 0);
+const curStreak = () => [dayKey(), prevDay(dayKey())].includes(quizStats.last) ? quizStats.streak : 0;
+function updateQuizDot(){ $("btnQuiz").classList.toggle("dot", !!cfg.tmdbKey && quizStats.last !== dayKey()); }
+
+// Döljer titelns ord i handlingen, så att den inte avslöjar svaret.
+function maskTitle(text, ...titles){
+  let t = text || "";
+  for (const ti of titles.filter(Boolean)){
+    const words = [ti, ...ti.split(/[\s:,.!?–—\-]+/).filter(w => w.length >= 4 && !QUIZ_STOP.has(w.toLowerCase()))];
+    for (const w of words) t = t.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "▢▢▢");
+  }
+  return t.length > 260 ? t.slice(0, 250).replace(/\s+\S*$/, "") + " …" : t;
+}
+
+// Kandidater: kända titlar (många röster) och nyare titlar, filmer och serier, bara på dina tjänster.
+async function quizPool(){
+  const iso = d => d.toISOString().slice(0, 10), today = iso(new Date());
+  const recent = new Date(); recent.setFullYear(recent.getFullYear() - 2);
+  const page = n => 1 + Math.floor(Math.random() * n);
+  const jobs = [];
+  for (const type of ["movie", "tv"]){
+    const ids = await myProviderIds(type);
+    if (!ids.length) continue;
+    const df = type === "movie" ? "primary_release_date" : "first_air_date";
+    const base = { watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"), with_watch_monetization_types:"flatrate",
+                   include_adult:"false", sort_by:"popularity.desc", [df + ".lte"]:today };
+    jobs.push([type, { ...base, "vote_count.gte":800, page:page(3) }]);
+    if (type === "movie") jobs.push([type, { ...base, "vote_count.gte":2000, page:page(3) }]);
+    jobs.push([type, { ...base, "vote_count.gte":100, [df + ".gte"]:iso(recent), page:page(2) }]);
+  }
+  const res = await Promise.all(jobs.map(([type, q]) => tmdbGet(`/discover/${type}`, q)
+    .then(r => (r.results || []).map(x => ({ ...x, type }))).catch(() => [])));
+  const seen = new Set(), out = [];
+  for (const x of res.flat()){
+    const id = x.type + "/" + x.id;
+    if (seen.has(id) || !x.poster_path || !(x.title || x.name)) continue;
+    seen.add(id); out.push({ id, x });
+  }
+  return out;
+}
+
+async function buildQuiz(){
+  const pool = await quizPool();
+  const titleOf = x => x.title || x.name;
+  const used = new Set(store.get("quizUsed", []));
+  const fresh = shuffle(pool.filter(p => !used.has(p.id)));
+  const picks = []; let series = 0;
+  for (const p of (fresh.length >= QUIZ_N ? fresh : shuffle(pool))){
+    if (picks.length >= QUIZ_N) break;
+    if (p.x.type === "tv" && series >= 2) continue;   // mest filmer
+    picks.push(p); if (p.x.type === "tv") series++;
+  }
+  const answerIds = new Set(picks.map(p => p.id));
+  return Promise.all(picks.map(async p => {
+    const x = p.x, type = x.type;
+    let d = {};
+    try{ d = await tmdbGet(`/${p.id}`, { language:"sv-SE", append_to_response:"credits" }); }catch{}
+    const title = d.title || d.name || titleOf(x);
+    // Fel svar: helst samma sort (film/serie) och inte dagens andra svar.
+    const others = shuffle(pool.filter(o => o.id !== p.id));
+    const order = [...others.filter(o => !answerIds.has(o.id) && o.x.type === type), ...others.filter(o => !answerIds.has(o.id) && o.x.type !== type),
+                   ...others.filter(o => answerIds.has(o.id))];
+    const opts = [];
+    for (const o of order){ const t = titleOf(o.x); if (opts.length < 3 && t !== title && !opts.includes(t)) opts.push(t); }
+    const date = d.release_date || d.first_air_date || x.release_date || x.first_air_date || "";
+    const genres = (d.genres || []).map(g => g.name).slice(0, 2);
+    const cast = (d.credits?.cast || []).map(c => c.name).filter(Boolean);
+    const maker = type === "movie" ? (d.credits?.crew || []).filter(c => c.job === "Director").map(c => c.name) : (d.created_by || []).map(c => c.name);
+    const plot = maskTitle(d.overview || x.overview, title, titleOf(x), d.original_title || d.original_name || x.original_title || x.original_name);
+    return { id:p.id, type, title, opts:shuffle([title, ...opts]), poster:"https://image.tmdb.org/t/p/w342" + (d.poster_path || x.poster_path),
+      clues:[ "📅 " + ([date.slice(0, 4), genres.join(", ")].filter(Boolean).join(" · ") || "Okänt år"),
+              cast.length ? `🎭 Med ${cast.slice(0, 2).join(" och ")}` : maker.length ? `🎬 ${type === "movie" ? "Regi" : "Skapad av"}: ${maker[0]}` : "🎭 Hittade inga skådespelare",
+              plot ? "📖 " + plot : cast.length > 2 ? `🎭 Även med ${cast.slice(2, 4).join(" och ")}` : "📖 Hittade ingen handling" ],
+      raw:{ id:x.id, title:x.title, name:x.name, overview:d.overview || x.overview, release_date:x.release_date, first_air_date:x.first_air_date,
+            vote_average:x.vote_average, vote_count:x.vote_count, poster_path:x.poster_path, backdrop_path:x.backdrop_path } };
+  }));
+}
+
+async function newQuiz(extra){
+  if (quizBusy) return;
+  quizBusy = true;
+  $("quizBody").innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Plockar fram ${extra ? "en extrarunda" : "dagens titlar"}…</p>`;
+  try{
+    const items = await buildQuiz();
+    if (items.length < 3) throw new Error("Hittade för få titlar på dina tjänster.");
+    quiz = { day:dayKey(), extra, items, idx:0, clues:0, answers:[] };
+    store.set("quiz", quiz);
+  }catch(e){
+    $("quizBody").innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Kunde inte skapa en runda: ${esc(e.message)}</p>
+      <div class="actions"><a href="#" class="primary" data-q="retry">Försök igen</a><a href="#" data-q="close">Stäng</a></div>`;
+    bindQuiz(extra);
+    return;
+  }finally{ quizBusy = false; }
+  renderQuiz();
+}
+
+async function openQuiz(){
+  $("quiz").classList.add("open");
+  if (cfg.tmdbKey && (!quiz || quiz.day !== dayKey())) return newQuiz(false);
+  renderQuiz();
+}
+
+function renderQuiz(){
+  const el = $("quizBody"); updateQuizDot();
+  if (!cfg.tmdbKey){ el.innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Quizet kräver en TMDB-nyckel under ⚙︎.</p><div class="actions"><a href="#" data-q="close">Stäng</a></div>`; return bindQuiz(); }
+  if (!quiz) return;
+  if (quizDone(quiz)) return renderQuizEnd();
+  const it = quiz.items[quiz.idx], a = quiz.answers[quiz.idx], n = a ? 3 : quiz.clues;
+  const dots = quiz.items.map((_, i) => `<i class="${quiz.answers[i] ? (quiz.answers[i].pts ? "ok" : "bad") : i === quiz.idx ? "cur" : ""}"></i>`).join("");
+  el.innerHTML = `<h2>🎬 ${quiz.extra ? "Extrarunda" : "Dagens filmquiz"}</h2>
+    <div class="qtop"><div class="qdots">${dots}</div><span id="qScore">${quizScore(quiz)} poäng</span></div>
+    <div class="qposter"><img alt="${a ? "Affisch: " + esc(it.title) : "Suddig affisch"}" src="${esc(it.poster)}" style="filter:blur(${a ? 0 : QUIZ_BLUR[n]}px);transform:scale(${a ? 1 : 1.15})"></div>
+    ${a ? `<div class="qres">${a.pts ? `Rätt! +${a.pts} poäng` : "Fel 😅"}</div>
+           <p class="m" style="text-align:center;margin:0">${a.pts ? "" : "Det var "}<b>${esc(it.title)}</b><span id="qSvc"></span></p>`
+        : `<p class="m" style="text-align:center;margin:10px 0 0">Vilken ${it.type === "tv" ? "serie" : "film"} är det? · Värd ${4 - n} poäng</p>`}
+    <div class="qclues">${it.clues.slice(0, n).map(c => `<div class="qclue">${esc(c)}</div>`).join("")}</div>
+    <div class="qopts">${it.opts.map((o, i) => `<button data-opt="${i}"${a ? " disabled" : ""} class="${a ? (o === it.title ? "ok" : i === a.pick ? "bad" : "") : ""}">${esc(o)}</button>`).join("")}</div>
+    <div class="actions">
+      ${a ? `<a href="#" class="primary" data-q="next">${quiz.idx === quiz.items.length - 1 ? "Se resultatet" : "Nästa →"}</a><a href="#" data-q="show">Visa titeln</a>`
+          : n < 3 ? `<a href="#" data-q="clue">💡 Ledtråd (−1 poäng)</a>` : ""}
+      <a href="#" data-q="close">Stäng</a>
+    </div>`;
+  bindQuiz();
+  if (a) myServicesFor(it.id).then(keys => { if (keys.length && $("qSvc") && quiz.items[quiz.idx] === it) $("qSvc").textContent = " · finns på " + keys.map(svcLabel).join(", "); }).catch(() => {});
+}
+
+function renderQuizEnd(){
+  const el = $("quizBody"), score = quizScore(quiz), max = quiz.items.length * 4, st = curStreak();
+  const verdict = score >= max * .8 ? "Filmnörd! 🍿" : score >= max * .5 ? "Snyggt! 👏" : score > 0 ? "Bättre lycka nästa gång" : "Aj då 😅";
+  el.innerHTML = `<h2>🎬 ${quiz.extra ? "Extrarundan är klar" : "Dagens quiz är klart"}</h2>
+    <div class="qbig">${score}<span style="font-size:20px;color:var(--mut)"> / ${max}</span></div>
+    <div class="qres" style="margin-top:0">${verdict}</div>
+    <div class="qstats">
+      <div><b>🔥 ${st}</b>${st === 1 ? "dag" : "dagar"} i rad</div>
+      <div><b>${quizStats.best}</b>bästa resultat</div>
+      <div><b>${quizStats.days}</b>spelade dagar</div>
+    </div>
+    <h3>Rundans titlar</h3>
+    <div class="hrow" id="qTitles"></div>
+    <div class="actions"><a href="#" data-q="extra">🎲 Spela en extrarunda</a><a href="#" data-q="close">Stäng</a></div>
+    <p class="tip">${quiz.extra ? "Extrarundor räknas inte i statistiken." : "En ny runda väntar i morgon."} Tryck på en titel för att se mer om den.</p>`;
+  bindQuiz();
+  const items = quiz.items.map(i => searchItem(i.raw, i.type)), q = quiz;
+  const draw = () => { const row = $("qTitles"); if (!row || quiz !== q) return; row.innerHTML = ""; items.forEach(it => row.appendChild(card("tmdb:" + it.show.tmdbId, it))); };
+  draw(); fillServices(items).then(draw);
+}
+
+function finishQuiz(){
+  store.set("quizUsed", [...quiz.items.map(i => i.id), ...store.get("quizUsed", [])].slice(0, 300));
+  if (quiz.extra || quizStats.last === quiz.day) return;
+  const score = quizScore(quiz);
+  quizStats.streak = quizStats.last === prevDay(quiz.day) ? quizStats.streak + 1 : 1;
+  quizStats.last = quiz.day; quizStats.days++; quizStats.total += score; quizStats.best = Math.max(quizStats.best, score);
+  store.set("quizStats", quizStats);
+}
+
+function bindQuiz(extra){
+  const el = $("quizBody");
+  el.querySelectorAll("[data-opt]").forEach(b => b.onclick = () => {
+    const it = quiz.items[quiz.idx]; if (quiz.answers[quiz.idx]) return;
+    const i = +b.dataset.opt, pts = it.opts[i] === it.title ? 4 - quiz.clues : 0;
+    quiz.answers[quiz.idx] = { pick:i, clues:quiz.clues, pts };
+    store.set("quiz", quiz);
+    try{ navigator.vibrate && navigator.vibrate(pts ? 20 : [40, 60, 40]); }catch{}
+    renderQuiz();
+  });
+  el.querySelectorAll("[data-q]").forEach(a => a.onclick = async e => {
+    e.preventDefault();
+    const q = a.dataset.q;
+    if (q === "close") closeTop();
+    else if (q === "retry") newQuiz(!!extra);
+    else if (q === "extra") newQuiz(true);
+    else if (q === "clue"){ if (quiz.clues < 3){ quiz.clues++; store.set("quiz", quiz); renderQuiz(); } }
+    else if (q === "next"){ quiz.idx++; quiz.clues = 0; if (quizDone(quiz)) finishQuiz(); store.set("quiz", quiz); renderQuiz(); $("quizBody").parentElement.scrollTop = 0; }
+    else if (q === "show"){
+      const it = quiz.items[quiz.idx], di = searchItem(it.raw, it.type);
+      await fillServices([di]);
+      openDetail("tmdb:" + di.show.tmdbId, di);
+    }
+  });
+}
+$("btnQuiz").onclick = openQuiz;
+updateQuizDot();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") updateQuizDot(); });
 
 bigCache.get(expKey());
 load();

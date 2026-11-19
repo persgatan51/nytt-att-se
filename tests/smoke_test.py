@@ -361,6 +361,37 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
         return !r.includes('recs|movie/1') && r.includes('recs|movie/2') && r.includes('top|gammal'); }"""),
           "rensningen tar bara gamla rekommendationer, inte dagslistor")
 
+    # 🎬 Filmquiz: suddig affisch, ledtrådar kostar poäng, statistik och extrarunda.
+    pg.evaluate("closeSheets(); localStorage.removeItem('quiz'); localStorage.removeItem('quizStats'); quiz = null; quizStats = { last:'', streak:0, best:0, days:0, total:0 }; updateQuizDot()")
+    check(pg.evaluate("$('btnQuiz').classList.contains('dot')"), "quizknappen har en prick när dagens runda inte är spelad")
+    pg.click("#btnQuiz"); pg.wait_for_timeout(800)
+    n = pg.evaluate("quiz.items.length")
+    check(n == 5 and pg.locator("#quizBody .qopts button").count() == 4, f"quizet har {n} frågor med 4 svar")
+    check("blur(26px)" in pg.locator("#quizBody .qposter img").get_attribute("style"), "affischen börjar suddig")
+    check(pg.evaluate("quiz.items.every(i => new Set(i.opts).size === 4 && i.opts.includes(i.title))"), "svaren är olika och ett är rätt")
+    pg.click("#quizBody [data-q='clue']")
+    check("blur(15px)" in pg.locator("#quizBody .qposter img").get_attribute("style") and pg.locator("#quizBody .qclue").count() == 1
+          and "Värd 3 poäng" in pg.locator("#quizBody").inner_text(), "ledtråd gör affischen skarpare och kostar en poäng")
+    pg.click(f"#quizBody [data-opt='{pg.evaluate('quiz.items[0].opts.indexOf(quiz.items[0].title)')}']")
+    check("Rätt! +3" in pg.locator("#quizBody .qres").inner_text() and pg.locator("#quizBody .qopts button.ok").count() == 1, "rätt svar ger 3 poäng efter en ledtråd")
+    for i in range(1, n + 1):
+        pg.click("#quizBody [data-q='next']")
+        if i < n: pg.click(f"#quizBody [data-opt='{pg.evaluate(f'(quiz.items[{i}].opts.indexOf(quiz.items[{i}].title) + 1) % 4')}']")
+    txt = pg.locator("#quizBody").inner_text()
+    check("3 / 20" in txt and pg.evaluate("quizStats.streak === 1 && quizStats.days === 1 && quizStats.best === 3"), f"resultat och statistik efter rundan ({pg.evaluate('quizStats')})")
+    pg.wait_for_timeout(300)
+    check(pg.locator("#qTitles .item").count() == n and not pg.evaluate("$('btnQuiz').classList.contains('dot')"), "rundans titlar visas och pricken försvinner")
+    before = len(calls); pg.evaluate("closeTop(); openQuiz()"); pg.wait_for_timeout(200)
+    check(len(calls) == before and "3 / 20" in pg.locator("#quizBody").inner_text(), "dagens runda byggs inte om när quizet öppnas igen")
+    check("Harry" not in pg.evaluate("maskTitle('Harry Potter möter Voldemort', 'Harry Potter och de vises sten')"), "titeln döljs i handlingen")
+    pg.click("#quizBody [data-q='extra']"); pg.wait_for_timeout(800)
+    pg.evaluate("() => { while (!quizDone(quiz)){ document.querySelector('#quizBody [data-opt]').click(); document.querySelector('#quizBody [data-q=next]').click(); } }")
+    check(pg.evaluate("quiz.extra && quizStats.days === 1") and "räknas inte" in pg.locator("#quizBody").inner_text(), "extrarundan räknas inte i statistiken")
+    pg.evaluate("quizStats.last = prevDay(dayKey()); quizStats.streak = 4; quiz.day = prevDay(dayKey()); closeTop(); openQuiz()"); pg.wait_for_timeout(800)
+    pg.evaluate("() => { while (!quizDone(quiz)){ document.querySelector('#quizBody [data-opt]').click(); document.querySelector('#quizBody [data-q=next]').click(); } }")
+    check(pg.evaluate("!quiz.extra && quizStats.streak === 5 && quizStats.days === 2"), "en ny dag ger en ny runda och förlänger sviten")
+    pg.evaluate("closeSheets()")
+
     # TV-start sparar vad som startades (med påhittad TvBridge).
     tv = ctx.new_page(); tv.on("pageerror", lambda e: errs.append("JS: "+str(e)))
     tv.add_init_script("""window.TvBridge = { getTv:() => JSON.stringify({ paired:true, host:'1.2.3.4' }),

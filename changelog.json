@@ -1,6 +1,17 @@
 [
   {
     "date": "2026-11-19",
+    "title": "🎬 Dagens filmquiz",
+    "changes": [
+      "Tryck på 🎬 högst upp och gissa fem filmer och serier från dina tjänster utifrån en suddig affisch.",
+      "Varje ledtråd (år och genre, en skådespelare, handlingen) gör affischen skarpare men ger en poäng mindre. Rätt utan ledtråd ger 4 poäng.",
+      "Efter varje svar ser du var titeln finns och kan öppna den direkt, så quizet blir också ett sätt att hitta något att se.",
+      "Spela varje dag för att bygga en svit 🔥. Vill du spela mer finns extrarundor, som inte räknas i statistiken.",
+      "En prick på 🎬 visar att dagens runda väntar."
+    ]
+  },
+  {
+    "date": "2026-11-19",
     "title": "Filtrera på längd",
     "changes": [
       "Tryck på ⏱ högst upp och välj Kort, Mellan eller Lång för att hitta något som passar kvällen. För filmer betyder det under 1,5 h, 1,5–2 h eller över 2 h, och för serier 1 säsong, 2–3 säsonger eller 4 eller fler.",
