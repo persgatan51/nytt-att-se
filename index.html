@@ -1856,7 +1856,7 @@ async function renderForYou(){
   const rated = m => validRating(m.rating);
   const base = recent.filter(m => rated(m) !== "down").slice(0, 8);
   const neg = recent.filter(m => rated(m) === "down").slice(0, 6);
-  const liked = recent.filter(m => m.status === "seen" && rated(m) === "up").slice(0, 1);   // "Eftersom du gillade …" – bara den senaste
+  const liked = recent.filter(m => m.status === "seen" && rated(m) === "up").slice(0, 3);   // "Eftersom du gillade …" – en rad, för den senaste 👍 som ger tillräckligt många förslag
   if (!base.length){ el.innerHTML = ""; return; }
   const weight = m => m.status === "want" ? 1.2 : ({ up:1.6, mid:0.5, down:-1 })[rated(m)] ?? 1;
   const sig = [...base, ...neg].map(m => m.item.show.tmdbId + ":" + (rated(m) || "")).join(",") + "|" +
@@ -1898,6 +1898,7 @@ async function renderForYou(){
         if (row.length < 2) continue;
         row.forEach(it => shown.add(it.show.tmdbId));
         because.push({ title:m.item.show.title, items:row });
+        break;   // bara en rad – nästa 👍-titel provas bara om den här gav för få förslag
       }
       const rest = cands.filter(it => !shown.has(it.show.tmdbId));
       await fillServices(rest);
@@ -2216,7 +2217,8 @@ function pumpLen(){
 async function lookupLen(tid){
   try{
     const c = await bigCache.get("len|"+tid);
-    if (c && Date.now() - c.t < 30*864e5){ lenCache.set(tid, +c.n || 0); return; }
+    // Okänd längd (t.ex. nya filmer som ännu saknar speltid hos TMDB) frågas om efter 2 dygn i stället för 30.
+    if (c && Date.now() - c.t < (+c.n ? 30 : 2)*864e5){ lenCache.set(tid, +c.n || 0); return; }
     const r = await tmdbGet("/"+tid);
     const n = Math.round(+(tid.startsWith("tv/") ? r.number_of_seasons : r.runtime)) || 0;
     lenCache.set(tid, n); bigCache.set("len|"+tid, { t:Date.now(), n });
@@ -2532,7 +2534,9 @@ $("watchNowBtn").onclick = async e => { e.preventDefault(); toast("Kollar bevakn
 // ---------- 🎬 Filmquiz: gissa titeln från en suddig affisch ----------
 // En runda per dag med titlar från dina tjänster. Varje ledtråd gör affischen skarpare men ger en poäng mindre.
 // Extrarundor går att spela hur många som helst men räknas inte i statistiken.
-const QUIZ_N = 5, QUIZ_BLUR = [26, 15, 8, 3];
+// Affischen börjar inzoomad på en del av bilden (oftast motivet, sällan titeltexten) och lite suddig.
+// Varje ledtråd zoomar ut och gör den skarpare. z = förstoring, b = oskärpa i px (före förstoringen).
+const QUIZ_N = 5, QUIZ_VIEW = [{ z:2.2, b:3 }, { z:1.7, b:2.5 }, { z:1.3, b:2 }, { z:1.1, b:1.5 }];
 const QUIZ_STOP = new Set(["från","över","till","efter","under","inte","utan","med","with","from","that","this","into","about","the","och"]);
 let quiz = store.get("quiz", null);   // { day, extra, items, idx, clues, answers:[{ pick, clues, pts }] }
 let quizStats = Object.assign({ last:"", streak:0, best:0, days:0, total:0 }, store.get("quizStats", {}));
@@ -2549,7 +2553,8 @@ function maskTitle(text, ...titles){
   let t = text || "";
   for (const ti of titles.filter(Boolean)){
     const words = [ti, ...ti.split(/[\s:,.!?–—\-]+/).filter(w => w.length >= 4 && !QUIZ_STOP.has(w.toLowerCase()))];
-    for (const w of words) t = t.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "▢▢▢");
+    // Bara hela ord: titeln "Us" ska inte göra "hus" till "h▢▢▢".
+    for (const w of words) t = t.replace(new RegExp("(?<![\\p{L}\\p{N}])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\p{L}\\p{N}])", "giu"), "▢▢▢");
   }
   return t.length > 260 ? t.slice(0, 250).replace(/\s+\S*$/, "") + " …" : t;
 }
@@ -2609,7 +2614,9 @@ async function buildQuiz(){
     const cast = (d.credits?.cast || []).map(c => c.name).filter(Boolean);
     const maker = type === "movie" ? (d.credits?.crew || []).filter(c => c.job === "Director").map(c => c.name) : (d.created_by || []).map(c => c.name);
     const plot = maskTitle(d.overview || x.overview, title, titleOf(x), d.original_title || d.original_name || x.original_title || x.original_name);
-    return { id:p.id, type, title, opts:shuffle([title, ...opts]), poster:"https://image.tmdb.org/t/p/w342" + (d.poster_path || x.poster_path),
+    // Zooma in mot mitten av affischen, där motivet brukar vara – titeltexten sitter oftast högst upp eller längst ner.
+    const focus = [35 + Math.round(Math.random() * 30), 38 + Math.round(Math.random() * 20)];
+    return { id:p.id, type, title, focus, opts:shuffle([title, ...opts]), poster:"https://image.tmdb.org/t/p/w342" + (d.poster_path || x.poster_path),
       clues:[ "📅 " + ([date.slice(0, 4), genres.join(", ")].filter(Boolean).join(" · ") || "Okänt år"),
               cast.length ? `🎭 Med ${cast.slice(0, 2).join(" och ")}` : maker.length ? `🎬 ${type === "movie" ? "Regi" : "Skapad av"}: ${maker[0]}` : "🎭 Hittade inga skådespelare",
               plot ? "📖 " + plot : cast.length > 2 ? `🎭 Även med ${cast.slice(2, 4).join(" och ")}` : "📖 Hittade ingen handling" ],
@@ -2642,36 +2649,45 @@ async function openQuiz(){
   renderQuiz();
 }
 
-function renderQuiz(){
+// Var bilden zoomas in (sparas med rundan, så att samma fråga ser likadan ut om quizet öppnas igen).
+const quizFocus = it => Array.isArray(it.focus) && it.focus.length === 2 ? it.focus.map(v => Math.min(80, Math.max(20, +v || 50))) : [50, 45];
+function quizView(it, v){
+  const [x, y] = quizFocus(it);
+  return v ? `filter:blur(${v.b}px);transform:scale(${v.z});transform-origin:${x}% ${y}%` : `filter:none;transform:none;transform-origin:${x}% ${y}%`;
+}
+
+// focus: vad som ska få fokus efter ett tryck (rutan ritas om, så annars tappas fokus).
+function renderQuiz(focus){
   const el = $("quizBody"); updateQuizDot();
   if (!cfg.tmdbKey){ el.innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Quizet kräver en TMDB-nyckel under ⚙︎.</p><div class="actions"><a href="#" data-q="close">Stäng</a></div>`; return bindQuiz(); }
   if (!quiz) return;
-  if (quizDone(quiz)) return renderQuizEnd();
+  if (quizDone(quiz)) return renderQuizEnd(focus);
   const it = quiz.items[quiz.idx], a = quiz.answers[quiz.idx], n = a ? 3 : quiz.clues;
   const dots = quiz.items.map((_, i) => `<i class="${quiz.answers[i] ? (quiz.answers[i].pts ? "ok" : "bad") : i === quiz.idx ? "cur" : ""}"></i>`).join("");
   el.innerHTML = `<h2>🎬 ${quiz.extra ? "Extrarunda" : "Dagens filmquiz"}</h2>
-    <div class="qtop"><div class="qdots">${dots}</div><span id="qScore">${quizScore(quiz)} poäng</span></div>
-    <div class="qposter"><img alt="${a ? "Affisch: " + esc(it.title) : "Suddig affisch"}" src="${esc(it.poster)}" style="filter:blur(${a ? 0 : QUIZ_BLUR[n]}px);transform:scale(${a ? 1 : 1.15})"></div>
-    ${a ? `<div class="qres">${a.pts ? `Rätt! +${a.pts} poäng` : "Fel 😅"}</div>
+    <div class="qtop"><div class="qdots" role="img" aria-label="Fråga ${quiz.idx + 1} av ${quiz.items.length}">${dots}</div><span id="qScore">${quizScore(quiz)} poäng</span></div>
+    <div class="qposter"><img alt="${a ? "Affisch: " + esc(it.title) : "Inzoomad, suddig affisch"}" src="${esc(it.poster)}" style="${quizView(it, a ? null : QUIZ_VIEW[n])}"></div>
+    ${a ? `<div class="qres" role="status">${a.pts ? `Rätt! +${a.pts} poäng` : "Fel 😅"}</div>
            <p class="m" style="text-align:center;margin:0">${a.pts ? "" : "Det var "}<b>${esc(it.title)}</b><span id="qSvc"></span></p>`
         : `<p class="m" style="text-align:center;margin:10px 0 0">Vilken ${it.type === "tv" ? "serie" : "film"} är det? · Värd ${4 - n} poäng</p>`}
     <div class="qclues">${it.clues.slice(0, n).map(c => `<div class="qclue">${esc(c)}</div>`).join("")}</div>
     <div class="qopts">${it.opts.map((o, i) => `<button data-opt="${i}"${a ? " disabled" : ""} class="${a ? (o === it.title ? "ok" : i === a.pick ? "bad" : "") : ""}">${esc(o)}</button>`).join("")}</div>
     <div class="actions">
       ${a ? `<a href="#" class="primary" data-q="next">${quiz.idx === quiz.items.length - 1 ? "Se resultatet" : "Nästa →"}</a><a href="#" data-q="show">Visa titeln</a>`
-          : n < 3 ? `<a href="#" data-q="clue">💡 Ledtråd (−1 poäng)</a>` : ""}
+          : n < 3 ? `<a href="#" data-q="clue" title="Ger en ledtråd och zoomar ut bilden">💡 Ledtråd (−1 poäng)</a>` : ""}
       <a href="#" data-q="close">Stäng</a>
     </div>`;
   bindQuiz();
+  if (focus) (el.querySelector(focus) || el.querySelector("[data-opt]:not([disabled])") || el.querySelector("[data-q]"))?.focus({ preventScroll:!a });
   if (a) myServicesFor(it.id).then(keys => { if (keys.length && $("qSvc") && quiz.items[quiz.idx] === it) $("qSvc").textContent = " · finns på " + keys.map(svcLabel).join(", "); }).catch(() => {});
 }
 
-function renderQuizEnd(){
+function renderQuizEnd(focus){
   const el = $("quizBody"), score = quizScore(quiz), max = quiz.items.length * 4, st = curStreak();
   const verdict = score >= max * .8 ? "Filmnörd! 🍿" : score >= max * .5 ? "Snyggt! 👏" : score > 0 ? "Bättre lycka nästa gång" : "Aj då 😅";
   el.innerHTML = `<h2>🎬 ${quiz.extra ? "Extrarundan är klar" : "Dagens quiz är klart"}</h2>
     <div class="qbig">${score}<span style="font-size:20px;color:var(--mut)"> / ${max}</span></div>
-    <div class="qres" style="margin-top:0">${verdict}</div>
+    <div class="qres" role="status" style="margin-top:0">${verdict}</div>
     <div class="qstats">
       <div><b>🔥 ${st}</b>${st === 1 ? "dag" : "dagar"} i rad</div>
       <div><b>${quizStats.best}</b>bästa resultat</div>
@@ -2682,6 +2698,7 @@ function renderQuizEnd(){
     <div class="actions"><a href="#" data-q="extra">🎲 Spela en extrarunda</a><a href="#" data-q="close">Stäng</a></div>
     <p class="tip">${quiz.extra ? "Extrarundor räknas inte i statistiken." : "En ny runda väntar i morgon."} Tryck på en titel för att se mer om den.</p>`;
   bindQuiz();
+  if (focus) el.querySelector(focus)?.focus({ preventScroll:true });
   const items = quiz.items.map(i => searchItem(i.raw, i.type)), q = quiz;
   const draw = () => { const row = $("qTitles"); if (!row || quiz !== q) return; row.innerHTML = ""; items.forEach(it => row.appendChild(card("tmdb:" + it.show.tmdbId, it))); };
   draw(); fillServices(items).then(draw);
@@ -2704,7 +2721,7 @@ function bindQuiz(extra){
     quiz.answers[quiz.idx] = { pick:i, clues:quiz.clues, pts };
     store.set("quiz", quiz);
     try{ navigator.vibrate && navigator.vibrate(pts ? 20 : [40, 60, 40]); }catch{}
-    renderQuiz();
+    renderQuiz("[data-q=next]");
   });
   el.querySelectorAll("[data-q]").forEach(a => a.onclick = async e => {
     e.preventDefault();
@@ -2712,8 +2729,8 @@ function bindQuiz(extra){
     if (q === "close") closeTop();
     else if (q === "retry") newQuiz(!!extra);
     else if (q === "extra") newQuiz(true);
-    else if (q === "clue"){ if (quiz.clues < 3){ quiz.clues++; store.set("quiz", quiz); renderQuiz(); } }
-    else if (q === "next"){ quiz.idx++; quiz.clues = 0; if (quizDone(quiz)) finishQuiz(); store.set("quiz", quiz); renderQuiz(); $("quizBody").parentElement.scrollTop = 0; }
+    else if (q === "clue"){ if (quiz.clues < 3){ quiz.clues++; store.set("quiz", quiz); renderQuiz("[data-q=clue]"); } }
+    else if (q === "next"){ quiz.idx++; quiz.clues = 0; if (quizDone(quiz)) finishQuiz(); store.set("quiz", quiz); $("quizBody").parentElement.scrollTop = 0; renderQuiz(quizDone(quiz) ? "[data-q=extra]" : "[data-opt]"); }
     else if (q === "show"){
       const it = quiz.items[quiz.idx], di = searchItem(it.raw, it.type);
       await fillServices([di]);

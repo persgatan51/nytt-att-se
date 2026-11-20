@@ -1,5 +1,23 @@
 [
   {
+    "date": "2026-11-20",
+    "title": "🎬 Lättare att se affischen i quizet",
+    "changes": [
+      "Affischen i quizet är inte längre helt suddig från början. I stället visas en inzoomad del av bilden, lite suddig, så att man kan känna igen ansikten och miljöer.",
+      "Varje ledtråd zoomar ut och gör bilden skarpare.",
+      "Handlingen döljer nu bara titelns hela ord. En film som heter Us gör alltså inte längre ordet \"hus\" oläsligt.",
+      "Efter ett svar hamnar man direkt på Nästa, och resultatet läses upp för skärmläsare."
+    ]
+  },
+  {
+    "date": "2026-11-20",
+    "title": "Buggrättningar",
+    "changes": [
+      "Eftersom du gillade försvinner inte längre om den senaste titeln du gett 👍 ger för få förslag. Då visas raden för din näst senaste 👍 i stället.",
+      "Nya filmer som ännu saknar speltid döljs inte längre av längdfiltret i en månad. Längden kollas igen efter två dygn."
+    ]
+  },
+  {
     "date": "2026-11-19",
     "title": "Färre rader på startsidan",
     "changes": [

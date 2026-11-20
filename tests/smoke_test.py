@@ -43,6 +43,7 @@ def tmdb(route):
         n=int(path.split("/")[2]); start = 420 if n == 703 else 400   # 703 ger egna förslag ("Eftersom du gillade")
         body={"results":[mk(i) for i in range(start,start+12)]}
         if n == 712: body={"results":[mk(i) for i in (440,440,441,441,442,443)]}   # TMDB kan ge samma förslag två gånger
+        if n == 713: body={"results":[mk(i) for i in (451,453,455)]}   # bara titlar som inte finns på dina tjänster
     elif re.match(r"^/tv/\d+$", path):
         fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*20))
         n=int(path.split("/")[2])
@@ -279,7 +280,14 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     ids = pg.evaluate("[...document.querySelectorAll('#forYou .item')].map(c => c.dataset.tid)")
     check(sum(h.startswith("Eftersom du gillade") for h in heads) == 1 and "Eftersom du gillade Annan gillad" in heads, f"bara en rad Eftersom du gillade, för den senaste 👍 ({heads})")
     check(len(ids) > 0 and len(ids) == len(set(ids)), f"ingen titel visas två gånger i För dig ({len(ids)} kort, {len(set(ids))} olika)")
-    pg.evaluate("delete marks['sa703']; store.set('marks', marks)")
+    # Ger den senaste 👍-titeln för få förslag på dina tjänster provas nästa, så att raden inte försvinner.
+    pg.evaluate("""() => { setMark('x', { show:{ showType:'movie', tmdbId:'movie/713', title:'Smal gillad', imageSet:{} }, added:{}, links:{} }, 'seen', 'up');
+        marks['movie/713'].t += 5000; }""")
+    pg.evaluate("renderForYou()"); pg.wait_for_timeout(1500)
+    heads = pg.locator("#forYou h3").all_inner_texts()
+    check([h for h in heads if h.startswith("Eftersom du gillade")] == ["Eftersom du gillade Annan gillad"],
+          f"för få förslag från senaste 👍 – nästa 👍-titel får raden ({heads})")
+    pg.evaluate("delete marks['movie/713']; delete marks['sa703']; store.set('marks', marks)")
 
     # Såg du klart? efter TV-start.
     pg.evaluate("""() => localStorage.setItem('lastPlayed', JSON.stringify({ id:'movie/709', t:Date.now() - 2*36e5, n:0,
@@ -363,6 +371,13 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("showTab('search')")
     check(not pg.locator("#btnLen").is_visible(), "längdfiltret gäller inte i Sök")
     pg.evaluate("showTab('new')")
+    # Okänd längd frågas om efter 2 dygn, känd längd sparas 30 dagar.
+    before = len(calls)
+    pg.evaluate("""async () => { await bigCache.set('len|movie/990', { t:Date.now() - 3*864e5, n:0 });
+        await bigCache.set('len|movie/991', { t:Date.now() - 3*864e5, n:95 }); await lookupLen('movie/990'); await lookupLen('movie/991'); }""")
+    got = [c for c in calls[before:] if "/movie/99" in c]
+    check(len(got) == 1 and "/movie/990" in got[0] and pg.evaluate("lenCache.get('movie/990') === 80 && lenCache.get('movie/991') === 95"),
+          f"okänd längd slås upp igen efter 2 dygn, känd längd sparas ({got})")
 
     # Rensningen tar bara gamla poster med rätt prefix.
     pg.evaluate("""async () => { await bigCache.set('recs|movie/1', { t:0, results:[] }); await bigCache.set('recs|movie/2', { t:Date.now(), results:[] });
@@ -379,13 +394,18 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.click("#btnQuiz"); pg.wait_for_timeout(800)
     n = pg.evaluate("quiz.items.length")
     check(n == 5 and pg.locator("#quizBody .qopts button").count() == 4, f"quizet har {n} frågor med 4 svar")
-    check("blur(26px)" in pg.locator("#quizBody .qposter img").get_attribute("style"), "affischen börjar suddig")
+    st = pg.locator("#quizBody .qposter img").get_attribute("style")
+    check("scale(2.2)" in st and "blur(3px)" in st, f"affischen börjar inzoomad och lite suddig ({st})")
     check(pg.evaluate("quiz.items.every(i => new Set(i.opts).size === 4 && i.opts.includes(i.title))"), "svaren är olika och ett är rätt")
     pg.click("#quizBody [data-q='clue']")
-    check("blur(15px)" in pg.locator("#quizBody .qposter img").get_attribute("style") and pg.locator("#quizBody .qclue").count() == 1
-          and "Värd 3 poäng" in pg.locator("#quizBody").inner_text(), "ledtråd gör affischen skarpare och kostar en poäng")
+    st = pg.locator("#quizBody .qposter img").get_attribute("style")
+    check("scale(1.7)" in st and "blur(2.5px)" in st and pg.locator("#quizBody .qclue").count() == 1
+          and "Värd 3 poäng" in pg.locator("#quizBody").inner_text(), f"ledtråd zoomar ut affischen och kostar en poäng ({st})")
     pg.click(f"#quizBody [data-opt='{pg.evaluate('quiz.items[0].opts.indexOf(quiz.items[0].title)')}']")
     check("Rätt! +3" in pg.locator("#quizBody .qres").inner_text() and pg.locator("#quizBody .qopts button.ok").count() == 1, "rätt svar ger 3 poäng efter en ledtråd")
+    check(pg.evaluate("document.activeElement?.dataset.q === 'next' && $('quizBody').querySelector('.qres').getAttribute('role') === 'status'"),
+          "efter svaret får Nästa fokus och resultatet läses upp")
+    check("filter:none" in pg.locator("#quizBody .qposter img").get_attribute("style").replace(" ", ""), "hela affischen visas efter svaret")
     for i in range(1, n + 1):
         pg.click("#quizBody [data-q='next']")
         if i < n: pg.click(f"#quizBody [data-opt='{pg.evaluate(f'(quiz.items[{i}].opts.indexOf(quiz.items[{i}].title) + 1) % 4')}']")
@@ -396,6 +416,8 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     before = len(calls); pg.evaluate("closeTop(); openQuiz()"); pg.wait_for_timeout(200)
     check(len(calls) == before and "3 / 20" in pg.locator("#quizBody").inner_text(), "dagens runda byggs inte om när quizet öppnas igen")
     check("Harry" not in pg.evaluate("maskTitle('Harry Potter möter Voldemort', 'Harry Potter och de vises sten')"), "titeln döljs i handlingen")
+    m = pg.evaluate("maskTitle('Familjen flyttar till ett hus, men ljuset i huset lockar fram Us.', 'Us')")
+    check("hus," in m and "ljuset" in m and "huset" in m and "Us." not in m, f"bara hela ord döljs ({m})")
     pg.click("#quizBody [data-q='extra']"); pg.wait_for_timeout(800)
     pg.evaluate("() => { while (!quizDone(quiz)){ document.querySelector('#quizBody [data-opt]').click(); document.querySelector('#quizBody [data-q=next]').click(); } }")
     check(pg.evaluate("quiz.extra && quizStats.days === 1") and "räknas inte" in pg.locator("#quizBody").inner_text(), "extrarundan räknas inte i statistiken")
