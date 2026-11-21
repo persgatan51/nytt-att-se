@@ -22,11 +22,25 @@ gist = {"content": None}
 HH_CODE = "abcdef0123456789abcdef0123456789"
 calls = []
 
+def credit(i, kind, date, role, **kw):   # som TMDB: film har title/release_date, serie name/first_air_date
+    d = mk(i); d.pop("name" if kind == "movie" else "title"); d.pop("first_air_date" if kind == "movie" else "release_date")
+    d["release_date" if kind == "movie" else "first_air_date"] = date
+    return dict(d, media_type=kind, character=role, **kw)
+
 def tmdb(route):
     u = route.request.url
     if "image.tmdb.org" in u: return route.fulfill(status=200, body=b"", content_type="image/jpeg")
     path = re.sub(r"\?.*","",u.split("/3",1)[1]); calls.append(path)
     if path.startswith("/watch/providers/"): body={"results":[{"provider_id":8,"provider_name":"Netflix"},{"provider_id":76,"provider_name":"Viaplay"}]}
+    elif re.match(r"^/person/\d+$", path):
+        body={"name":"Anna Skådis","birthday":"1980-05-01","profile_path":"/a.jpg","combined_credits":{"cast":[
+            credit(730, "movie", "2015-03-01", "Lisa"),
+            credit(731, "tv", "2023-09-10", "Eva"),
+            credit(731, "tv", "2023-09-10", "Eva (röst)"),   # samma serie två gånger
+            credit(732, "movie", "2019-11-20", "Mia"),
+            credit(733, "tv", "2024-01-01", "Self", genre_ids=[10767]),   # pratshow
+            credit(734, "movie", "", "Ny roll"),   # utan datum: sist
+            credit(735, "movie", "2021-06-01", "Herself")]}}
     elif path.startswith("/search/"): body={"results":[dict(mk(i), media_type="movie") for i in range(300,306)]}
     elif path.startswith("/genre/"): body={"genres":[{"id":28,"name":"action"},{"id":35,"name":"komedi"}]}
     elif path.startswith("/discover/") and ("first_air_date.gte" in u or "primary_release_date.gte" in u):
@@ -52,7 +66,7 @@ def tmdb(route):
     elif re.match(r"^/movie/\d+$", path):
         n=int(path.split("/")[2])
         vids = [{"site":"YouTube","key":"trl715","type":"Trailer","official":True}] if n == 715 else []
-        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[],"crew":[]},"videos":{"results":vids},
+        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[{"id":55,"name":"Anna Skådis","character":"Lisa"}] if n == 717 else [],"crew":[]},"videos":{"results":vids},
               "recommendations":{"results":[mk(i) for i in range(200,210)]}}
     else: body={}
     route.fulfill(status=200, body=json.dumps(body), content_type="application/json")
@@ -458,6 +472,26 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
           { service:{ id:'prime' }, type:'subscription' } ] } });
         return l.netflix.t === true && l.netflix.a === false && l.prime.t === null && svLangText({ prime:l.prime }) === ''; }"""),
           "språk läses från Streaming Availability, och okänt visas inte som saknas")
+    pg.evaluate("closeSheets()")
+
+    # Tryck på en skådespelare: allt hen medverkat i, nyast först.
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/717', title:'Med skådis', imageSet:{} },
+        added:{ netflix:0 }, links:{}, approx:{} })""")
+    pg.wait_for_selector("#people a.person", timeout=3000)
+    pg.click("#people a.person"); pg.wait_for_timeout(1200)
+    titles = pg.locator("#personResults .item .t").all_inner_texts()
+    check(pg.locator("#personView").evaluate("e => e.classList.contains('open')") and "Anna Skådis" in pg.locator("#personBody h2").inner_text(),
+          "tryck på skådespelare öppnar hens lista")
+    check(titles == ["Serie 731", "Film 732", "Film 730", "Film 734"], f"skådespelarens titlar nyast först, utan pratshower och dubbletter ({titles})")
+    pg.click("[data-pmine='1']"); pg.wait_for_timeout(200)
+    mine = pg.locator("#personResults .item .t").all_inner_texts()
+    check(mine == ["Film 732", "Film 730", "Film 734"], f"filtret På mina tjänster ({mine})")
+    pg.click("[data-pmine='0']"); pg.wait_for_timeout(200)
+    pg.locator("#personResults .item").first.click(); pg.wait_for_timeout(500)
+    check(pg.evaluate("topSheet().id") == "detail" and pg.locator("#detailBody h2").inner_text() == "Serie 731",
+          "titel i skådespelarens lista öppnar detaljvyn överst")
+    pg.evaluate("closeTop()")
+    check(pg.evaluate("topSheet().id") == "personView", "bakåt från detaljvyn går tillbaka till skådespelarens lista")
     pg.evaluate("closeSheets()")
 
     # TV-start sparar vad som startades (med påhittad TvBridge).

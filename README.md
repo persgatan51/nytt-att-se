@@ -7,6 +7,7 @@ Appen har fyra flikar längst ner: **Nytt**, **Upptäck** (topplistor, kommande,
 
 - **Nyheter** per dag, filter för film/serie, år och originalspråk.
 - **Sök** titlar och skådespelare.
+- **🎭 Skådespelare:** tryck på ett namn i detaljvyn för att se allt hen varit med i, nyast först.
 - **⭐ Vill se / ✓ Sett / 🗑 Ta bort** på varje titel (långt tryck ger snabbval).
 - **Liknande titlar** i detaljvyn och **✨ För dig** på startsidan, utifrån det du markerat.
 - **💡 Tips** efter genre, **🏆 Topplistor** per tjänst och **⏳ Försvinner snart**.

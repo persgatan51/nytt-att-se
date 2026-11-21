@@ -93,6 +93,11 @@
   .actions a.trailer{background:#2a2f3a;border-color:#3a4150}
   #people{margin-top:8px;line-height:1.5}
   #people b{color:var(--fg);font-weight:600}
+  h3 .allby{color:var(--acc);text-decoration:none;font-weight:400;text-transform:none}
+  #people a.person{color:var(--fg);text-decoration:underline;text-decoration-color:var(--mut);text-underline-offset:2px}
+  .phead{display:flex;gap:12px;align-items:center}
+  .phead img{width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--card);flex:none}
+  .wrapchips button.on{background:var(--acc);color:#111;border-color:var(--acc)}
   .actions a.primary{background:var(--acc);color:#111;border-color:var(--acc)}
   .actions a.netflix{background:#e50914;border-color:#e50914}
   .actions a.prime{background:#00a8e1;border-color:#00a8e1;color:#001}
@@ -291,6 +296,8 @@
 <div class="sheet" id="changelog"><div class="panel"><div class="pad" id="changelogBody"></div></div></div>
 
 <div class="sheet" id="detail"><div class="panel" id="detailBody"></div></div>
+
+<div class="sheet" id="personView"><div class="panel"><div class="pad" id="personBody"></div></div></div>
 
 <div class="sheet" id="rate"><div class="panel"><div class="pad" id="rateBody"></div></div></div>
 
@@ -942,7 +949,7 @@ async function loadExtras(s){
   try{
     const j = await tmdbGet("/"+s.tmdbId, { language:"sv-SE", append_to_response:"credits,videos,recommendations,similar,external_ids",
                                            include_video_language:"sv,en,null" });
-    const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ name:c.name, role:c.character }));
+    const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ id:c.id, name:c.name, role:c.character }));
     // Längden följer med gratis – spara den för längdfiltret.
     const n = Math.round(+(s.tmdbId.startsWith("tv/") ? j.number_of_seasons : j.runtime)) || 0;
     if (n){ lenCache.set(s.tmdbId, n); bigCache.set("len|"+s.tmdbId, { t:Date.now(), n, d:j.release_date || j.first_air_date || "" }); }
@@ -1008,7 +1015,7 @@ function openDetail(id,it){
     if (txt && $("detail").dataset.cur === s.tmdbId && $("svLang")) $("svLang").textContent = txt;
   });
   if (cfg.tmdbKey && s.tmdbId) $("similar").innerHTML = `<h3>Liknande på dina tjänster</h3><p class="m">Letar…</p>`;
-  document.getElementById("detail").classList.add("open");
+  openSheet($("detail"));
   document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeTop(); };
   document.querySelectorAll("#detailBody [data-mark]").forEach(a => a.onclick = e => {
     e.preventDefault();
@@ -1026,8 +1033,9 @@ function openDetail(id,it){
     if (ex.sv) $("overview").textContent = ex.sv;
     const ppl = [];
     if (ex.makers.length) ppl.push(`<div><b>${s.showType==="series"?"Skapad av":"Regi"}:</b> ${esc(ex.makers.join(", "))}</div>`);
-    if (ex.cast.length) ppl.push(`<div><b>Skådespelare:</b> ${ex.cast.map(c=>esc(c.name)+(c.role?` <span style="opacity:.7">(${esc(c.role)})</span>`:"")).join(", ")}</div>`);
+    if (ex.cast.length) ppl.push(`<div><b>Skådespelare:</b> ${ex.cast.map(c=>(c.id ? `<a href="#" class="person" data-pid="${+c.id}">${esc(c.name)}</a>` : esc(c.name))+(c.role?` <span style="opacity:.7">(${esc(c.role)})</span>`:"")).join(", ")}</div>`);
     if (ppl.length) $("people").innerHTML = ppl.join("");
+    $("people").querySelectorAll("a.person").forEach(a => a.onclick = e => { e.preventDefault(); openPerson(+a.dataset.pid, a.textContent); });
     if (ex.trailer) $("trailerSlot").innerHTML = (TV && tvInfo().paired
         ? `<a href="#" class="tv trailer" data-svc="youtube" data-trailer="1" data-url="${esc(ex.trailer)}">📺 Trailer på TV</a>` : "") +
       `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
@@ -1258,6 +1266,68 @@ async function myServicesFor(tmdbId, fresh=false){
   return (providerCache[tmdbId] = keys);
 }
 
+// ---------- Skådespelare: allt hen medverkat i, nyast först ----------
+// Ett TMDB-anrop (person + combined_credits). Pratshower, nyheter och roller som "sig själv" räknas inte.
+const personCache = {};
+let personSeq = 0;
+const creditDate = x => x.release_date || x.first_air_date || "";
+function personCredits(cast){
+  const seen = new Set();
+  return (cast || [])
+    .filter(x => (x.media_type === "movie" || x.media_type === "tv")
+      && !(x.genre_ids || []).some(g => g === 10767 || g === 10763)
+      && !/^(self|himself|herself|themselves|sig själv)\b/i.test((x.character || "").trim())
+      && !seen.has(x.media_type + x.id) && seen.add(x.media_type + x.id))
+    // Nyast först; titlar utan datum (oftast ej klara) hamnar sist.
+    .sort((a, b) => (creditDate(b) || "0").localeCompare(creditDate(a) || "0"));
+}
+async function openPerson(pid, name){
+  if (!pid) return;
+  const seq = ++personSeq, body = $("personBody");
+  let onlyMine = store.get("personMine", false);
+  body.innerHTML = `<h2>${esc(name || "Skådespelare")}</h2><div class="msg">Hämtar filmer och serier…</div>`;
+  $("personBody").parentElement.scrollTop = 0;
+  openSheet($("personView"));
+  let d = personCache[pid];
+  try{
+    if (!d){
+      const j = await tmdbGet(`/person/${pid}`, { language:"sv-SE", append_to_response:"combined_credits" });
+      d = personCache[pid] = { name:j.name || name, photo:j.profile_path ? "https://image.tmdb.org/t/p/w185"+j.profile_path : null,
+        born:j.birthday || "", items:personCredits(j.combined_credits?.cast).map(x => {
+          const it = searchItem(x); it.role = x.character || ""; return it; }) };
+    }
+  }catch(e){ if (seq === personSeq) body.innerHTML = `<h2>${esc(name || "")}</h2><div class="msg">${esc(e.message)}</div>`; return; }
+  if (seq !== personSeq) return;
+  const draw = () => {
+    if (seq !== personSeq || !$("personView").classList.contains("open")) return;
+    const items = onlyMine ? d.items.filter(it => it.pending || Object.keys(it.added).length) : d.items;
+    const nMovie = d.items.filter(it => it.show.showType === "movie").length;
+    body.innerHTML = `
+      <div class="phead">${d.photo ? `<img alt="" src="${esc(d.photo)}">` : ""}<div>
+        <h2>${esc(d.name)}</h2>
+        <div class="m">${nMovie} ${nMovie === 1 ? "film" : "filmer"} · ${d.items.length - nMovie} ${d.items.length - nMovie === 1 ? "serie" : "serier"}${d.born ? ` · född ${esc(d.born.slice(0,4))}` : ""}</div></div></div>
+      <div class="wrapchips" id="personFilter">
+        <button data-pmine="0" class="${onlyMine ? "" : "on"}">Alla</button>
+        <button data-pmine="1" class="${onlyMine ? "on" : ""}">På mina tjänster</button>
+      </div>
+      <p class="m">Nyast först.</p>
+      <div class="grid" id="personResults"></div>
+      ${items.length ? "" : `<div class="msg">${onlyMine ? "Inget av det finns på dina tjänster." : "Hittade inga filmer eller serier."}</div>`}`;
+    const g = $("personResults");
+    items.forEach(it => g.appendChild(card("tmdb:" + it.show.tmdbId, it)));
+    body.querySelectorAll("[data-pmine]").forEach(b => b.onclick = () => {
+      onlyMine = b.dataset.pmine === "1"; store.set("personMine", onlyMine); draw(); });
+  };
+  redraws.personView = draw;
+  draw();
+  const todo = d.items.filter(it => it.pending);
+  for (let i = 0; i < todo.length; i += 24){
+    await fillServices(todo.slice(i, i + 24));
+    if (seq !== personSeq) return;
+    draw();
+  }
+}
+
 function searchItem(x, type){
   type = type || x.media_type;
   const tmdbId = (type==="tv" ? "tv/" : "movie/") + x.id, date = x.release_date || x.first_air_date || "";
@@ -1293,7 +1363,7 @@ async function runSearch(q){
     }
     const sections = [];
     if (titles.length) sections.push({ title:"Titlar", items:titles });
-    if (credits.length) sections.push({ title:`Med ${person.name}`, items:credits, onlyMine:true });
+    if (credits.length) sections.push({ title:`Med ${person.name}`, items:credits, onlyMine:true, person });
     if (!sections.length){ st.textContent = "Inga träffar."; out.innerHTML = ""; return; }
     st.style.display = "none";
     const draw = () => {
@@ -1305,6 +1375,11 @@ async function runSearch(q){
         if (sec.onlyMine) items = items.filter(it=>it.pending || Object.keys(it.added).length);
         if (!items.length) continue;
         const h = document.createElement("h3"); h.textContent = sec.title; out.appendChild(h);
+        if (sec.person){
+          const a = document.createElement("a"); a.href = "#"; a.className = "allby"; a.textContent = " · Visa allt, nyast först ›";
+          a.onclick = e => { e.preventDefault(); openPerson(sec.person.id, sec.person.name); };
+          h.appendChild(a);
+        }
         const g = document.createElement("div"); g.className = "grid"; out.appendChild(g);
         items.forEach(it => g.appendChild(card("tmdb:"+it.show.tmdbId, it)));
       }
@@ -2154,6 +2229,15 @@ document.querySelectorAll(".sheet").forEach(s => {
   }).observe(s, { attributes:true, attributeFilter:["class"] });
   s.addEventListener("click", e => { if (e.target === s) s.classList.remove("open"); });
 });
+// Öppnar en ruta, eller lyfter den överst om den redan är öppen under en annan
+// (t.ex. detaljvyn när man trycker på en titel i en skådespelares lista).
+function openSheet(s){
+  if (s.classList.contains("open") && s.dataset.z && topSheet() !== s){
+    s.dataset.z = ++sheetSeq; s.style.zIndex = 20 + sheetSeq; updateInert();
+    s.querySelector(".panel").focus({ preventScroll:true });
+  }
+  s.classList.add("open");
+}
 function topSheet(){ return [...document.querySelectorAll(".sheet.open")].sort((a, b) => (+b.dataset.z || 0) - (+a.dataset.z || 0))[0] || null; }
 function closeTop(){ const s = topSheet(); if (!s) return false; s.classList.remove("open"); return true; }
 // Allt utom den översta rutan görs inert, så att Tab och skärmläsare stannar i rutan (aria-modal).

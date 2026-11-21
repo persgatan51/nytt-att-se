@@ -1,6 +1,16 @@
 [
   {
     "date": "2026-11-21",
+    "title": "🎭 Se allt en skådespelare varit med i",
+    "changes": [
+      "Tryck på en skådespelares namn i detaljvyn så visas alla filmer och serier hen varit med i, nyast först.",
+      "Du kan välja att bara visa det som finns på dina tjänster. Det som inte finns där visas nedtonat.",
+      "Pratshower och framträdanden som sig själv räknas inte med.",
+      "När du söker på en skådespelare finns länken Visa allt, nyast först."
+    ]
+  },
+  {
+    "date": "2026-11-21",
     "title": "📺 Trailer på TV, sluttid och svensk text",
     "changes": [
       "I detaljvyn finns nu knappen 📺 Trailer på TV, som startar trailern i YouTube på TV:n (i Android-appen med parkopplad TV).",
