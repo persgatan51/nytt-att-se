@@ -1,5 +1,24 @@
 [
   {
+    "date": "2026-11-21",
+    "title": "📺 Trailer på TV, sluttid och svensk text",
+    "changes": [
+      "I detaljvyn finns nu knappen 📺 Trailer på TV, som startar trailern i YouTube på TV:n (i Android-appen med parkopplad TV).",
+      "Detaljvyn visar när filmen slutar om du startar den nu, t.ex. \"Slutar ca 22:47\". För serier visas när ett avsnitt är slut.",
+      "Detaljvyn visar om titeln har svensk text och svenskt tal på dina tjänster, när streamingtjänsten anger det."
+    ]
+  },
+  {
+    "date": "2026-11-21",
+    "title": "Förbättringar",
+    "changes": [
+      "Quizet visar inte längre titeln på affischen i första bilden. Bilden zoomar in på motivet och är lite suddigare från början.",
+      "Om telefonen är inställd på att minska rörelse stängs animationerna av, t.ex. när quizaffischen zoomar ut.",
+      "Nyhetslistan sparas på ett sätt som rymmer mer. Den behöver därför inte hämtas om lika ofta, vilket sparar på API-gränsen.",
+      "Eftersom du gillade och längdfiltret gör färre anrop i bakgrunden, så att appen blir snabbare."
+    ]
+  },
+  {
     "date": "2026-11-20",
     "title": "🎬 Lättare att se affischen i quizet",
     "changes": [

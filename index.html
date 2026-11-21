@@ -130,6 +130,10 @@
   .qdots i.cur{background:var(--fg)}.qdots i.ok{background:#2fb36d}.qdots i.bad{background:#d9534f}
   .qposter{width:52%;max-width:220px;margin:0 auto;aspect-ratio:2/3;border-radius:12px;overflow:hidden;background:var(--card)}
   .qposter img{width:100%;height:100%;object-fit:cover;display:block;transition:filter .4s,transform .4s}
+  /* Minska rörelse: inga animationer eller övergångar (t.ex. när quizaffischen zoomar ut). */
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important}
+  }
   .qclues{margin:12px 0 4px;display:flex;flex-direction:column;gap:6px}
   .qclue{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:14px}
   .qopts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
@@ -563,18 +567,47 @@ function ingest(res){
     if (c.timestamp && (!it.added[svc] || c.timestamp > it.added[svc])) it.added[svc] = c.timestamp;
     const opt = (show.streamingOptions?.[COUNTRY] || []).find(o=>o.service?.id===svc && o.type!=="rent" && o.type!=="buy");
     it.links[svc] = opt?.videoLink || opt?.link || c.link || it.links[svc];
+    if (opt) (it.svLang ||= {})[svc] = svLangOf(opt);
     state.shows.set(c.showId, it);
   }
   state.cursor = res.nextCursor || null;
   state.hasMore = !!res.hasMore;
 }
 
+// ---------- 🇸🇪 Svensk text och svenskt tal (från Streaming Availability) ----------
+// SA anger språk som ISO 639-2 ("swe"). { t: svensk text, a: svenskt tal } per tjänst – null om SA inte angett något.
+const svLangOf = o => ({ t:Array.isArray(o.subtitles) && o.subtitles.length ? o.subtitles.some(x => x?.locale?.language === "swe") : null,
+                         a:Array.isArray(o.audios) && o.audios.length ? o.audios.some(x => x?.language === "swe") : null });
+function svLangFromShow(show){
+  const out = {};
+  for (const o of show?.streamingOptions?.[COUNTRY] || []){
+    const k = o.service?.id; if (!k || o.type === "rent" || o.type === "buy") continue;
+    const v = svLangOf(o), p = out[k] || { t:null, a:null };
+    const or = (x, y) => x === true || y === true ? true : x === false || y === false ? false : null;
+    out[k] = { t:or(p.t, v.t), a:or(p.a, v.a) };
+  }
+  return out;
+}
+// Text till detaljvyn, bara för dina tjänster. Tom om inget är känt.
+function svLangText(langs){
+  const mine = Object.entries(langs || {}).filter(([k, v]) => cfg.services.includes(k) && v && typeof v === "object");
+  if (!mine.length) return "";
+  const known = f => mine.some(([, v]) => v[f] === true) ? true : mine.some(([, v]) => v[f] === false) ? false : null;
+  const t = known("t"), a = known("a");
+  const parts = [t === true ? "Svensk text" : t === false ? "Ingen svensk text" : "",
+                 a === true ? "Svenskt tal" : a === false ? "Inget svenskt tal" : ""].filter(Boolean);
+  return parts.length ? "🇸🇪 " + parts.join(" · ") : "";
+}
+
 const feedKey = () => ["feed4", cfg.source, cfg.services.join(","),
   cfg.source==="tmdb" ? (cfg.yearOn ? cfg.minYear : "ar") + (cfg.langOn ? cfg.langs.join("") : "alla") : ""].join("|");
+// Nyhetsflödet sparas i IndexedDB (localStorage blev fullt med hela flödet, och då hämtades allt om vid varje start).
 function saveCache(){
-  store.set(feedKey(),{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
+  bigCache.set(feedKey(),{ t:Date.now(), cursor:state.cursor, hasMore:state.hasMore,
                      items:[...state.shows.entries()] });
 }
+// Gamla flöden som låg i localStorage tas bort en gång.
+try{ Object.keys(localStorage).filter(k => /^feed\d*\|/.test(k)).forEach(k => localStorage.removeItem(k)); }catch{}
 
 async function load(force=false, more=false){
   const status = document.getElementById("status");
@@ -584,7 +617,7 @@ async function load(force=false, more=false){
     status.style.display=""; showUsage(); return;
   }
   if (!force && !more){
-    const c = store.get(feedKey(),null);
+    const c = await bigCache.get(feedKey());
     if (c && Date.now()-c.t < CACHE_HOURS*36e5){
       state.shows = new Map(c.items); state.cursor = c.cursor; state.hasMore = c.hasMore;
       await enrich(); render(); return;
@@ -912,7 +945,9 @@ async function loadExtras(s){
     const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ name:c.name, role:c.character }));
     // Längden följer med gratis – spara den för längdfiltret.
     const n = Math.round(+(s.tmdbId.startsWith("tv/") ? j.number_of_seasons : j.runtime)) || 0;
-    if (n){ lenCache.set(s.tmdbId, n); bigCache.set("len|"+s.tmdbId, { t:Date.now(), n }); }
+    if (n){ lenCache.set(s.tmdbId, n); bigCache.set("len|"+s.tmdbId, { t:Date.now(), n, d:j.release_date || j.first_air_date || "" }); }
+    // Avsnittslängd för serier (till "Slutar ca …"): senaste avsnittet, annars TMDB:s typiska längd.
+    const epMin = Math.round(+(j.last_episode_to_air?.runtime || j.next_episode_to_air?.runtime || (j.episode_run_time || [])[0])) || 0;
     const makers = s.tmdbId.startsWith("movie/")
       ? (j.credits?.crew || []).filter(c=>c.job==="Director").map(c=>c.name)
       : (j.created_by || []).map(c=>c.name);
@@ -922,7 +957,7 @@ async function loadExtras(s){
     const type = s.tmdbId.startsWith("movie/") ? "movie" : "tv";
     const recs = (j.recommendations?.results?.length ? j.recommendations.results : j.similar?.results || [])
       .filter(x => x.poster_path).slice(0, 20).map(x => searchItem(x, type));
-    const ex = { sv:j.overview || null, cast, makers, recs, imdb: j.imdb_id || j.external_ids?.imdb_id || null,
+    const ex = { sv:j.overview || null, cast, makers, recs, imdb: j.imdb_id || j.external_ids?.imdb_id || null, epMin,
                  trailer: best && (best.type==="Trailer" || best.type==="Teaser") ? "https://www.youtube.com/watch?v="+best.key : null };
     extrasCache[s.tmdbId] = ex;
     return ex;
@@ -946,6 +981,8 @@ function openDetail(id,it){
         : "Ny på "+esc(addedTxt)}</div>
       ${leavingFor(s.tmdbId).map(x=>`<div class="m leave">⏳ Försvinner från ${esc(svcLabel(x.svc))} ${x.ts ? new Date(x.ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"long"}) : "snart"}</div>`).join("")}
       <div id="ratings" class="m"></div>
+      <div id="endTime" class="m"></div>
+      <div id="svLang" class="m">${esc(svLangText(it.svLang))}</div>
       <p id="overview">${esc((meta[s.tmdbId]?.sv) || s.overview || "")}</p>
       <div id="people" class="m">${Array.isArray(s.cast) && s.cast.length ? "Med: "+esc(s.cast.slice(0,6).join(", ")) : ""}</div>
       <div class="actions">
@@ -965,6 +1002,11 @@ function openDetail(id,it){
     </div>`;
   $("detailBody").scrollTop = 0;
   $("detail").dataset.cur = s.tmdbId || "";
+  showEndTime(s);
+  if (!it.svLang && s.tmdbId) bigCache.get("svl|"+s.tmdbId).then(c => {
+    const txt = svLangText(c?.langs);
+    if (txt && $("detail").dataset.cur === s.tmdbId && $("svLang")) $("svLang").textContent = txt;
+  });
   if (cfg.tmdbKey && s.tmdbId) $("similar").innerHTML = `<h3>Liknande på dina tjänster</h3><p class="m">Letar…</p>`;
   document.getElementById("detail").classList.add("open");
   document.getElementById("closeDetail").onclick = e=>{ e.preventDefault(); closeTop(); };
@@ -986,10 +1028,25 @@ function openDetail(id,it){
     if (ex.makers.length) ppl.push(`<div><b>${s.showType==="series"?"Skapad av":"Regi"}:</b> ${esc(ex.makers.join(", "))}</div>`);
     if (ex.cast.length) ppl.push(`<div><b>Skådespelare:</b> ${ex.cast.map(c=>esc(c.name)+(c.role?` <span style="opacity:.7">(${esc(c.role)})</span>`:"")).join(", ")}</div>`);
     if (ppl.length) $("people").innerHTML = ppl.join("");
-    if (ex.trailer) $("trailerSlot").innerHTML = `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
+    if (ex.trailer) $("trailerSlot").innerHTML = (TV && tvInfo().paired
+        ? `<a href="#" class="tv trailer" data-svc="youtube" data-trailer="1" data-url="${esc(ex.trailer)}">📺 Trailer på TV</a>` : "") +
+      `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
+    showEndTime(s, ex.epMin);
     renderSimilar(s, ex.recs || []);
     renderRatings(s, ex.imdb || s.imdbId);
   });
+}
+
+// "Slutar ca 22:47" – när filmen (eller ett avsnitt av serien) är slut om man startar nu.
+function endTimeText(s, epMin){
+  const min = s.showType === "series" ? +epMin || 0 : lenOf(s);
+  if (!(min > 0 && min < 600)) return "";
+  const end = new Date(Date.now() + min * 6e4).toLocaleTimeString("sv-SE", { hour:"2-digit", minute:"2-digit" });
+  return s.showType === "series" ? `⏰ Ett avsnitt (${min} min) slutar ca ${end} om du startar nu` : `⏰ Slutar ca ${end} om du startar nu`;
+}
+function showEndTime(s, epMin){
+  const el = $("endTime"); if (!el || $("detail").dataset.cur !== (s.tmdbId || "")) return;
+  const txt = endTimeText(s, epMin); if (txt || !el.textContent) el.textContent = txt;
 }
 
 // Liknande titlar (TMDB-rekommendationer), bara de som finns på dina tjänster och som du inte sett/tagit bort.
@@ -1094,6 +1151,8 @@ async function lookupDirectLink(svc, tmdbId){
     .find(o => o.service?.id === svc && o.type !== "rent" && o.type !== "buy");
   const link = opt?.videoLink || opt?.link || null;
   if (link){ cache[key] = link; store.set("deeplinks", cache); }
+  const langs = svLangFromShow(show);
+  if (Object.keys(langs).length) bigCache.set("svl|"+tmdbId, { t:Date.now(), langs });
   showUsage();
   return link;
 }
@@ -1114,7 +1173,7 @@ document.addEventListener("click", async e => {
     toast("Skickar till TV:n…");
     await tvCall("launch", url);
     toast("Öppnas på TV:n 📺");
-    const it = tvItems[a.dataset.tmdb];
+    const it = !a.dataset.trailer && tvItems[a.dataset.tmdb];
     if (it) store.set("lastPlayed", { id:a.dataset.tmdb, item:snapshot(it), t:Date.now(), n:0 });
   }catch(err){ toast(err.message); }
 });
@@ -1891,8 +1950,10 @@ async function renderForYou(){
       for (const m of liked){
         const id = m.item.show.tmdbId;
         const inRow = new Set();
+        // Högst 12 tjänstuppslag per 👍-titel – 8 kort räcker till raden.
         const list = (recsOf.get(id) || []).filter(x => x.poster_path).map(x => searchItem(x, typeOf(id)))
-          .filter(it => !marked.has(it.show.tmdbId) && !shown.has(it.show.tmdbId) && !inRow.has(it.show.tmdbId) && inRow.add(it.show.tmdbId));
+          .filter(it => !marked.has(it.show.tmdbId) && !shown.has(it.show.tmdbId) && !inRow.has(it.show.tmdbId) && inRow.add(it.show.tmdbId))
+          .slice(0, 12);
         await fillServices(list);
         const row = list.filter(it => Object.keys(it.added).length).slice(0, 8);
         if (row.length < 2) continue;
@@ -2214,14 +2275,20 @@ function pumpLen(){
     lookupLen(tid).finally(() => { lenBusy--; lenChanged(tid); pumpLen(); });
   }
 }
+// Hur länge en sparad längd gäller. Okänd längd för en titel som haft premiär de senaste 60 dagarna (eller saknar datum)
+// frågas om efter 2 dygn – nya filmer får ofta sin speltid hos TMDB först efter premiären. Annars 30 dygn.
+function lenTtl(c){
+  if (+c.n) return 30*864e5;
+  const d = Date.parse(c.d || "");
+  return !c.d || !Number.isFinite(d) || Date.now() - d < 60*864e5 ? 2*864e5 : 30*864e5;
+}
 async function lookupLen(tid){
   try{
     const c = await bigCache.get("len|"+tid);
-    // Okänd längd (t.ex. nya filmer som ännu saknar speltid hos TMDB) frågas om efter 2 dygn i stället för 30.
-    if (c && Date.now() - c.t < (+c.n ? 30 : 2)*864e5){ lenCache.set(tid, +c.n || 0); return; }
+    if (c && Date.now() - c.t < lenTtl(c)){ lenCache.set(tid, +c.n || 0); return; }
     const r = await tmdbGet("/"+tid);
     const n = Math.round(+(tid.startsWith("tv/") ? r.number_of_seasons : r.runtime)) || 0;
-    lenCache.set(tid, n); bigCache.set("len|"+tid, { t:Date.now(), n });
+    lenCache.set(tid, n); bigCache.set("len|"+tid, { t:Date.now(), n, d:r.release_date || r.first_air_date || "" });
   }catch{ lenCache.set(tid, lenCache.get(tid) || 0); }
 }
 function lenChanged(tid){
@@ -2536,7 +2603,7 @@ $("watchNowBtn").onclick = async e => { e.preventDefault(); toast("Kollar bevakn
 // Extrarundor går att spela hur många som helst men räknas inte i statistiken.
 // Affischen börjar inzoomad på en del av bilden (oftast motivet, sällan titeltexten) och lite suddig.
 // Varje ledtråd zoomar ut och gör den skarpare. z = förstoring, b = oskärpa i px (före förstoringen).
-const QUIZ_N = 5, QUIZ_VIEW = [{ z:2.2, b:3 }, { z:1.7, b:2.5 }, { z:1.3, b:2 }, { z:1.1, b:1.5 }];
+const QUIZ_N = 5, QUIZ_VIEW = [{ z:2.4, b:4.5 }, { z:1.8, b:3 }, { z:1.35, b:2 }, { z:1.1, b:1.5 }];
 const QUIZ_STOP = new Set(["från","över","till","efter","under","inte","utan","med","with","from","that","this","into","about","the","och"]);
 let quiz = store.get("quiz", null);   // { day, extra, items, idx, clues, answers:[{ pick, clues, pts }] }
 let quizStats = Object.assign({ last:"", streak:0, best:0, days:0, total:0 }, store.get("quizStats", {}));
@@ -2614,8 +2681,9 @@ async function buildQuiz(){
     const cast = (d.credits?.cast || []).map(c => c.name).filter(Boolean);
     const maker = type === "movie" ? (d.credits?.crew || []).filter(c => c.job === "Director").map(c => c.name) : (d.created_by || []).map(c => c.name);
     const plot = maskTitle(d.overview || x.overview, title, titleOf(x), d.original_title || d.original_name || x.original_title || x.original_name);
-    // Zooma in mot mitten av affischen, där motivet brukar vara – titeltexten sitter oftast högst upp eller längst ner.
-    const focus = [35 + Math.round(Math.random() * 30), 38 + Math.round(Math.random() * 20)];
+    // Zooma in mot motivet i övre mitten av affischen – titeltexten sitter oftast längst ner (eller högst upp),
+    // och med y 30–50 % hamnar den nedre delen utanför den första, inzoomade bilden.
+    const focus = [35 + Math.round(Math.random() * 30), 30 + Math.round(Math.random() * 20)];
     return { id:p.id, type, title, focus, opts:shuffle([title, ...opts]), poster:"https://image.tmdb.org/t/p/w342" + (d.poster_path || x.poster_path),
       clues:[ "📅 " + ([date.slice(0, 4), genres.join(", ")].filter(Boolean).join(" · ") || "Okänt år"),
               cast.length ? `🎭 Med ${cast.slice(0, 2).join(" och ")}` : maker.length ? `🎬 ${type === "movie" ? "Regi" : "Skapad av"}: ${maker[0]}` : "🎭 Hittade inga skådespelare",
@@ -2753,8 +2821,9 @@ document.addEventListener("visibilitychange", () => {
 // Rensa gamla rekommendationer, tjänstuppslag och hushållslistor en gång per dygn.
 if (store.get("pruneDay", "") !== dayKey()){
   store.set("pruneDay", dayKey());
-  setTimeout(() => bigCache.prune(["prov|", "recs|", "hh|", "len|"],
-    (k, v) => !(v && Date.now() - v.t < (k.startsWith("len|") ? 30 : 2)*864e5)), 5000);
+  // Nyhetsflöden (feed4|…) för gamla inställningar tas bort efter en vecka.
+  setTimeout(() => bigCache.prune(["prov|", "recs|", "hh|", "len|", "feed4|", "svl|"],
+    (k, v) => !(v && Date.now() - v.t < (/^(len|svl)\|/.test(k) ? 30 : k.startsWith("feed") ? 7 : 2)*864e5)), 5000);
 }
 // Markeringar som synkades in innan cleanItem fanns rensas en gång.
 if (!store.get("cleanMarks1", false)){

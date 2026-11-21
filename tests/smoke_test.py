@@ -51,7 +51,8 @@ def tmdb(route):
               "recommendations":{"results":[mk(i) for i in range(200,210)]},"external_ids":{"imdb_id":"tt999"}}
     elif re.match(r"^/movie/\d+$", path):
         n=int(path.split("/")[2])
-        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[],"crew":[]},"videos":{"results":[]},
+        vids = [{"site":"YouTube","key":"trl715","type":"Trailer","official":True}] if n == 715 else []
+        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[],"crew":[]},"videos":{"results":vids},
               "recommendations":{"results":[mk(i) for i in range(200,210)]}}
     else: body={}
     route.fulfill(status=200, body=json.dumps(body), content_type="application/json")
@@ -395,11 +396,13 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     n = pg.evaluate("quiz.items.length")
     check(n == 5 and pg.locator("#quizBody .qopts button").count() == 4, f"quizet har {n} frågor med 4 svar")
     st = pg.locator("#quizBody .qposter img").get_attribute("style")
-    check("scale(2.2)" in st and "blur(3px)" in st, f"affischen börjar inzoomad och lite suddig ({st})")
+    check("scale(2.4)" in st and "blur(4.5px)" in st, f"affischen börjar inzoomad och lite suddig ({st})")
+    check(pg.evaluate("quiz.items.every(i => i.focus[1] >= 30 && i.focus[1] <= 50 && i.focus[0] >= 35 && i.focus[0] <= 65)"),
+          "inzoomningen siktar på övre mitten, så att titeltexten längst ner inte syns i första bilden")
     check(pg.evaluate("quiz.items.every(i => new Set(i.opts).size === 4 && i.opts.includes(i.title))"), "svaren är olika och ett är rätt")
     pg.click("#quizBody [data-q='clue']")
     st = pg.locator("#quizBody .qposter img").get_attribute("style")
-    check("scale(1.7)" in st and "blur(2.5px)" in st and pg.locator("#quizBody .qclue").count() == 1
+    check("scale(1.8)" in st and "blur(3px)" in st and pg.locator("#quizBody .qclue").count() == 1
           and "Värd 3 poäng" in pg.locator("#quizBody").inner_text(), f"ledtråd zoomar ut affischen och kostar en poäng ({st})")
     pg.click(f"#quizBody [data-opt='{pg.evaluate('quiz.items[0].opts.indexOf(quiz.items[0].title)')}']")
     check("Rätt! +3" in pg.locator("#quizBody .qres").inner_text() and pg.locator("#quizBody .qopts button.ok").count() == 1, "rätt svar ger 3 poäng efter en ledtråd")
@@ -424,6 +427,37 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("quizStats.last = prevDay(dayKey()); quizStats.streak = 4; quiz.day = prevDay(dayKey()); closeTop(); openQuiz()"); pg.wait_for_timeout(800)
     pg.evaluate("() => { while (!quizDone(quiz)){ document.querySelector('#quizBody [data-opt]').click(); document.querySelector('#quizBody [data-q=next]').click(); } }")
     check(pg.evaluate("!quiz.extra && quizStats.streak === 5 && quizStats.days === 2"), "en ny dag ger en ny runda och förlänger sviten")
+    pg.emulate_media(reduced_motion="reduce")
+    check(pg.evaluate("parseFloat(getComputedStyle(document.querySelector('#quizBody .qposter img') || document.body).transitionDuration) < 0.01"),
+          "minska rörelse stänger av animationerna")
+    pg.emulate_media(reduced_motion="no-preference")
+    pg.evaluate("closeSheets()")
+
+    # Nyhetsflödet sparas i IndexedDB, inte i localStorage.
+    check(pg.evaluate("""async () => !Object.keys(localStorage).some(k => /^feed\\d*\\|/.test(k))
+        && ((await bigCache.get(feedKey()))?.items?.length || 0) > 0"""), "nyhetsflödet sparas i IndexedDB och inte i localStorage")
+    pg.evaluate("localStorage.setItem('feed3|gammal', '{}')"); pg.reload(); pg.wait_for_timeout(2500)
+    check(pg.evaluate("localStorage.getItem('feed3|gammal') === null"), "gamla flöden i localStorage tas bort")
+
+    # Okänd längd: kort livstid bara för nya titlar.
+    check(pg.evaluate("""lenTtl({ n:0, d:'2001-01-01' }) === 30*864e5 && lenTtl({ n:0, d:new Date().toISOString().slice(0,10) }) === 2*864e5
+        && lenTtl({ n:0 }) === 2*864e5 && lenTtl({ n:95, d:new Date().toISOString().slice(0,10) }) === 30*864e5"""),
+          "okänd längd frågas om efter 2 dygn bara för nya titlar")
+
+    # Sluttid och svensk text/tal i detaljvyn.
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/716', title:'Sluttid', runtime:95, imageSet:{} },
+        added:{ netflix:0 }, links:{}, approx:{}, svLang:{ netflix:{ t:true, a:false }, hbo:{ t:false, a:true } } })""")
+    pg.wait_for_timeout(300)
+    et = pg.locator("#endTime").inner_text()
+    check(re.search(r"Slutar ca \d\d:\d\d", et) is not None, f"detaljvyn visar när filmen slutar ({et})")
+    sv = pg.locator("#svLang").inner_text()
+    check(sv == "🇸🇪 Svensk text · Inget svenskt tal", f"detaljvyn visar svensk text/tal för dina tjänster ({sv})")
+    check(pg.evaluate("""() => { const l = svLangFromShow({ streamingOptions:{ se:[
+          { service:{ id:'netflix' }, type:'subscription', subtitles:[{ locale:{ language:'swe' } }], audios:[{ language:'eng' }] },
+          { service:{ id:'netflix' }, type:'rent', audios:[{ language:'swe' }] },
+          { service:{ id:'prime' }, type:'subscription' } ] } });
+        return l.netflix.t === true && l.netflix.a === false && l.prime.t === null && svLangText({ prime:l.prime }) === ''; }"""),
+          "språk läses från Streaming Availability, och okänt visas inte som saknas")
     pg.evaluate("closeSheets()")
 
     # TV-start sparar vad som startades (med påhittad TvBridge).
@@ -437,6 +471,12 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     tv.click("#detailBody a.tv"); tv.wait_for_timeout(300)
     check(tv.evaluate("window.__launched") == "https://www.netflix.com/title/710?source=30"
           and tv.evaluate("JSON.parse(localStorage.lastPlayed).id") == "movie/710", "Spela på TV sparar titeln för Såg du klart?")
+    tv.evaluate("""() => { closeSheets(); openDetail('x', { show:{ showType:'movie', tmdbId:'movie/715', title:'Med trailer', imageSet:{} },
+        added:{ netflix:0 }, links:{ netflix:'https://www.netflix.com/title/715' }, approx:{} }); }""")
+    tv.wait_for_selector("#detailBody a.tv.trailer", timeout=3000)
+    tv.click("#detailBody a.tv.trailer"); tv.wait_for_timeout(300)
+    check(tv.evaluate("window.__launched") == "https://www.youtube.com/watch?v=trl715"
+          and tv.evaluate("JSON.parse(localStorage.lastPlayed).id") == "movie/710", "Trailer på TV startar YouTube och räknas inte som att titeln startats")
     b.close()
 
 print("JS-fel:" , [e for e in errs if e.startswith("JS")])
