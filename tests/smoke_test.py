@@ -61,6 +61,11 @@ def tmdb(route):
     elif path.startswith("/discover/"): body={"page":1,"total_pages":3,"results":[mk(i) for i in range(100,110)]}
     elif path.startswith("/network/"): body={"name":{"213":"Netflix","2552":"Apple TV+"}.get(path.split("/")[2],"Annat")}
     elif path.startswith("/search/company"): body={"results":[{"id":178464,"name":"Netflix"}]}
+    elif path == "/movie/741/watch/providers":   # bara hyra/köpa: kostar extra
+        body={"results":{"SE":{"rent":[{"provider_name":"Amazon Video"},{"provider_name":"SF Anytime"}],"buy":[{"provider_name":"Amazon Video"}],
+                               "flatrate":[{"provider_name":"C More"}]}}}
+    elif path == "/movie/743/watch/providers":   # gratis med reklam
+        body={"results":{"SE":{"ads":[{"provider_name":"Pluto TV"}],"free":[{"provider_name":"SVT Play"}]}}}
     elif path.endswith("/watch/providers"):
         n=int(path.split("/")[2]); body={"results":{"SE":{"flatrate":[{"provider_name":"Netflix" if n%2==0 else "Okänd"}]}}}
     elif path.endswith("/recommendations"):
@@ -570,6 +575,25 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
         added:{ netflix:0 }, links:{}, approx:{} })""")
     pg.evaluate("$('endTime').textContent = 'gammal'; refreshEndTime()")
     check(re.search(r"Slutar ca \d\d:\d\d", pg.locator("#endTime").inner_text()) is not None, "sluttiden räknas om")
+
+    # 💳 Gratis eller betala
+    pg.evaluate("closeSheets()")
+    pg.evaluate("openDetail('x', { show:{ showType:'movie', tmdbId:'movie/742', title:'Ingår', imageSet:{} }, added:{ netflix:0 }, links:{}, approx:{}, search:true })")
+    pg.wait_for_timeout(400)
+    check("Ingår i ditt abonnemang på Netflix" in pg.locator("#price").inner_text(), "pris: titel på din tjänst ingår – " + pg.locator("#price").inner_text())
+    pg.evaluate("closeSheets()")
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/741', title:'Hyrfilm', imageSet:{},
+        streamingOptions:{ se:[{ service:{ id:'prime', name:'Prime Video' }, type:'rent', price:{ formatted:'49 SEK' } }] } }, added:{}, links:{}, approx:{}, search:true })""")
+    pg.wait_for_timeout(400)
+    pr = pg.locator("#price").inner_text()
+    check("Kostar extra" in pr and "hyr 49 SEK" in pr and "SF Anytime (hyr)" in pr and pr.count("Prime Video") + pr.count("Amazon Video") == 1
+          and "abonnemang du inte har: C More" in pr, "pris: hyra/köpa med pris, en rad per butik – " + pr)
+    pg.evaluate("closeSheets()")
+    pg.evaluate("openDetail('x', { show:{ showType:'movie', tmdbId:'movie/743', title:'Gratisfilm', imageSet:{} }, added:{}, links:{}, approx:{}, search:true })")
+    pg.wait_for_timeout(400)
+    pr = pg.locator("#price").inner_text()
+    check("Gratis på SVT Play" in pr and "Gratis med reklam på Pluto TV" in pr and "Kostar extra" not in pr, "pris: gratis visas – " + pr)
+    pg.evaluate("closeSheets()")
     pg.evaluate("closeSheets()")
 
     # Hinns före: tiden räknas till i dag, eller i morgon om den ligger långt bakåt.

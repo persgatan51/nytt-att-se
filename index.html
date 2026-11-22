@@ -132,6 +132,7 @@
   .alert button{padding:4px 10px;flex:none}
   #ratings a{color:var(--fg);text-decoration:none}
   .leave{color:#ffb4a2}
+  .price.ok{color:#9be3a8} .price.pay{color:#ffd58a}
   #btnSettings{position:relative}
   #btnSettings.dot::after{content:"";position:absolute;top:3px;right:3px;width:9px;height:9px;border-radius:50%;background:var(--acc)}
   .cl{border-top:1px solid var(--line);padding:12px 0}
@@ -1021,6 +1022,7 @@ function openDetail(id,it){
       <div class="m">${it.search
         ? (Object.keys(it.added).length ? "Finns på "+esc(Object.keys(it.added).map(svcLabel).join(", ")) : "Finns inte på dina tjänster")
         : "Ny på "+esc(addedTxt)}</div>
+      <div id="price"></div>
       ${leavingFor(s.tmdbId).map(x=>`<div class="m leave">⏳ Försvinner från ${esc(svcLabel(x.svc))} ${x.ts ? new Date(x.ts*1000).toLocaleDateString("sv-SE",{day:"numeric",month:"long"}) : "snart"}</div>`).join("")}
       <div id="ratings" class="m"></div>
       <div id="endTime" class="m"></div>
@@ -1045,6 +1047,7 @@ function openDetail(id,it){
   $("detailBody").scrollTop = 0;
   $("detail").dataset.cur = s.tmdbId || "";
   showEndTime(s);
+  showPrice(s);
   if (!it.svLang && s.tmdbId) bigCache.get("svl|"+s.tmdbId).then(c => {
     const txt = svLangText(c?.langs);
     if (txt && $("detail").dataset.cur === s.tmdbId && $("svLang")) $("svLang").textContent = txt;
@@ -1305,10 +1308,80 @@ async function myServicesFor(tmdbId, fresh=false){
     const r = await tmdbGet(`/${tmdbId}/watch/providers`);
     const se = r.results?.SE || {};
     names = [...(se.flatrate||[]), ...(se.free||[]), ...(se.ads||[])].map(p=>(p.provider_name||"").trim());
-    bigCache.set("prov|"+tmdbId, { t:Date.now(), names });
+    bigCache.set("prov|"+tmdbId, { t:Date.now(), names, se:seProviders(se) });
   }
   const keys = mine().filter(svc => names.some(n => svc.match.test(n))).map(svc=>svc.key);
   return (providerCache[tmdbId] = keys);
+}
+
+// ---------- 💳 Gratis eller betala? ----------
+// TMDB delar upp var en titel finns i Sverige: flatrate (ingår i abonnemang), free (gratis), ads (gratis med reklam),
+// rent (hyra) och buy (köpa). Priser finns bara i Streaming Availability, och används när titeln redan hämtats därifrån.
+const seProviders = se => Object.fromEntries(["flatrate","free","ads","rent","buy"]
+  .map(k => [k, [...new Set((se?.[k] || []).map(p => (p.provider_name || "").trim()).filter(Boolean))]]));
+async function seProvidersFor(tmdbId){
+  const c = await bigCache.get("prov|"+tmdbId);
+  if (c?.se && Date.now() - c.t < 864e5) return c.se;
+  const r = await tmdbGet(`/${tmdbId}/watch/providers`);
+  const raw = r.results?.SE || {}, se = seProviders(raw);
+  bigCache.set("prov|"+tmdbId, { t:Date.now(), names:[...se.flatrate, ...se.free, ...se.ads], se });
+  return se;
+}
+// "Amazon Video" (TMDB) och "Prime Video" (SA) är samma butik, liksom "Apple TV" och "iTunes".
+const shopKey = n => /amazon|prime/i.test(n) ? "amazon" : /apple|itunes/i.test(n) ? "apple" : (n.toLowerCase().split(/\s+/)[0] || n);
+// Lägger ihop TMDB:s lista (om nyckel finns) med SA:s streamingOptions (om titeln kommer därifrån).
+function priceSummary(se, opts){
+  const out = { mine:[], free:[], ads:[], other:[], pay:new Map() };
+  const add = (arr, x) => { if (x && !arr.includes(x)) arr.push(x); };
+  const myLabel = n => mine().find(svc => svc.match.test(n))?.label;
+  const payAdd = (name, kind, price) => {
+    const k = shopKey(name), cur = out.pay.get(k) || { name, rent:null, buy:null, has:new Set() };
+    cur.has.add(kind); if (price && !cur[kind]) cur[kind] = price; out.pay.set(k, cur);
+  };
+  for (const n of se?.flatrate || []) { const m = myLabel(n); m ? add(out.mine, m) : add(out.other, n); }
+  for (const n of se?.free || []) add(out.free, n);
+  for (const n of se?.ads || []) add(out.ads, n);
+  for (const n of se?.rent || []) payAdd(n, "rent");
+  for (const n of se?.buy || []) payAdd(n, "buy");
+  for (const o of opts || []){
+    const id = o.service?.id, name = SERVICES.find(x => x.key === id)?.label || o.service?.name || id; if (!name) continue;
+    const price = o.price?.formatted || (o.price?.amount ? `${o.price.amount} ${o.price.currency || ""}`.trim() : null);
+    if (o.type === "subscription") cfg.services.includes(id) ? add(out.mine, name) : add(out.other, name);
+    else if (o.type === "free") add(out.free, name);
+    else if (o.type === "ads") add(out.ads, name);
+    else if (o.type === "rent" || o.type === "buy") payAdd(name, o.type, price);
+    else if (o.type === "addon") add(out.other, name + (o.addon?.name ? " (" + o.addon.name + ")" : " (tillägg)"));
+  }
+  return out;
+}
+function priceHtml(p){
+  const L = a => esc(a.join(", "));
+  if (p.mine.length) return `<div class="m price ok">✅ Ingår i ditt abonnemang på ${L(p.mine)} – ingen extra kostnad</div>`;
+  const rows = [];
+  if (p.free.length) rows.push(`<div class="m price ok">🆓 Gratis på ${L(p.free)}</div>`);
+  if (p.ads.length) rows.push(`<div class="m price ok">🆓 Gratis med reklam på ${L(p.ads)}</div>`);
+  if (p.pay.size){
+    const shops = [...p.pay.values()].map(x => {
+      const bits = [];
+      if (x.has.has("rent")) bits.push("hyr" + (x.rent ? " " + x.rent : ""));
+      if (x.has.has("buy")) bits.push("köp" + (x.buy ? " " + x.buy : ""));
+      return `${x.name} (${bits.join(", ")})`;
+    });
+    rows.push(`<div class="m price pay">💳 Kostar extra: ${esc(shops.join(" · "))}</div>`);
+  }
+  if (p.other.length) rows.push(`<div class="m price">📺 Ingår i abonnemang du inte har: ${L(p.other)}</div>`);
+  if (!rows.length) rows.push(`<div class="m price">Ingen tjänst i Sverige visar den just nu</div>`);
+  return rows.join("");
+}
+async function showPrice(s){
+  const el = $("price"); if (!el || !s) return;
+  const still = () => $("detail").classList.contains("open") && $("detail").dataset.cur === (s.tmdbId || "");
+  const opts = s.streamingOptions?.[COUNTRY] || [];
+  let se = null;
+  if (cfg.tmdbKey && s.tmdbId){
+    try { se = await seProvidersFor(s.tmdbId); } catch { if (!opts.length){ if (still()) el.textContent = ""; return; } }
+  } else if (!opts.length){ el.textContent = ""; return; }
+  if (still()) el.innerHTML = priceHtml(priceSummary(se, opts));
 }
 
 // ---------- Personer: allt en skådespelare (eller regissör/serieskapare) medverkat i, nyast först ----------

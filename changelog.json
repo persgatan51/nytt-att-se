@@ -1,6 +1,14 @@
 [
   {
     "date": "2026-11-22",
+    "title": "💳 Gratis eller betala?",
+    "changes": [
+      "I detaljvyn ser du nu direkt om titeln ingår i något av dina abonnemang, är gratis (t.ex. SVT Play eller gratis med reklam) eller kostar extra att hyra eller köpa.",
+      "När priset är känt visas det, t.ex. ”Prime Video (hyr 49 kr)”. Finns titeln i ett abonnemang du inte har står det också."
+    ]
+  },
+  {
+    "date": "2026-11-22",
     "title": "🎭 Följ skådespelare och regissörer",
     "changes": [
       "Tryck ☆ Följ i en skådespelares lista så säger bevakningen till när något nytt med hen finns på dina tjänster. I Android-appen kommer det som notis.",

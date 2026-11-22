@@ -14,6 +14,7 @@ Appen har fyra flikar längst ner: **Nytt**, **Upptäck** (topplistor, kommande,
 - **💡 Tips** efter genre, **🏆 Topplistor** per tjänst och **⏳ Försvinner snart**.
 - **🎬 Filmquiz:** gissa fem titlar från dina tjänster om dagen utifrån en suddig affisch. Ledtrådar gör den skarpare men kostar poäng, och dagliga rundor bygger en svit.
 - **🔔 Bevakning:** säger till när något på Vill se dyker upp på dina tjänster, när en serie du sett får en ny säsong och när något på Vill se försvinner och när det kommit något nytt med en person du följer. I Android-appen kommer det som notis.
+- **💳 Gratis eller betala:** detaljvyn visar om titeln ingår i dina abonnemang, är gratis eller måste hyras/köpas (med pris när det finns).
 - **Betyg** från IMDb, Rotten Tomatoes och Metacritic.
 - **Synk** av markeringarna mellan enheter via en privat GitHub-gist.
 
