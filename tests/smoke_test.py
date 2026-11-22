@@ -32,7 +32,14 @@ def tmdb(route):
     if "image.tmdb.org" in u: return route.fulfill(status=200, body=b"", content_type="image/jpeg")
     path = re.sub(r"\?.*","",u.split("/3",1)[1]); calls.append(path)
     if path.startswith("/watch/providers/"): body={"results":[{"provider_id":8,"provider_name":"Netflix"},{"provider_id":76,"provider_name":"Viaplay"}]}
+    elif re.match(r"^/person/(56|57)$", path):   # många roller: tjänsterna ska slås upp lite i taget
+        body={"name":"Många Roller","combined_credits":{"cast":[credit(i, "movie", f"20{24 - (i - 3000)//12:02d}-01-{1 + (i - 3000)%12:02d}", "Roll")
+            for i in range(3000, 3080)]}}
+    elif re.match(r"^/person/\d+/combined_credits$", path):   # bevakningen av följda personer
+        body={"cast":[credit(730, "movie", "2015-03-01", "Lisa"), credit(731, "tv", "2023-09-10", "Eva"), credit(732, "movie", "2019-11-20", "Mia")],
+              "crew":[dict(credit(737, "movie", "2020-02-02", ""), job="Director")]}
     elif re.match(r"^/person/\d+$", path):
+        fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*60))
         body={"name":"Anna Skådis","birthday":"1980-05-01","profile_path":"/a.jpg","combined_credits":{"cast":[
             credit(730, "movie", "2015-03-01", "Lisa"),
             credit(731, "tv", "2023-09-10", "Eva"),
@@ -40,7 +47,10 @@ def tmdb(route):
             credit(732, "movie", "2019-11-20", "Mia"),
             credit(733, "tv", "2024-01-01", "Self", genre_ids=[10767]),   # pratshow
             credit(734, "movie", "", "Ny roll"),   # utan datum: sist
-            credit(735, "movie", "2021-06-01", "Herself")]}}
+            credit(735, "movie", "2021-06-01", "Herself"),
+            credit(736, "movie", fut, "Kommande roll")],   # premiär om två månader: i Kommande
+            "crew":[dict(credit(737, "movie", "2020-02-02", ""), job="Director"), dict(credit(737, "movie", "2020-02-02", ""), job="Screenplay"),
+                    dict(credit(738, "movie", "2018-01-01", ""), job="Sound")]}}
     elif path.startswith("/search/"): body={"results":[dict(mk(i), media_type="movie") for i in range(300,306)]}
     elif path.startswith("/genre/"): body={"genres":[{"id":28,"name":"action"},{"id":35,"name":"komedi"}]}
     elif path.startswith("/discover/") and ("first_air_date.gte" in u or "primary_release_date.gte" in u):
@@ -61,12 +71,12 @@ def tmdb(route):
     elif re.match(r"^/tv/\d+$", path):
         fut = time.strftime("%Y-%m-%d", time.localtime(time.time()+86400*20))
         n=int(path.split("/")[2])
-        body={"number_of_seasons":1+n%5,"overview":"Svensk","next_episode_to_air":{"episode_number":1,"season_number":4,"air_date":fut},"last_episode_to_air":{"season_number":3},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
+        body={"number_of_seasons":1+n%5,"overview":"Svensk","next_episode_to_air":{"episode_number":1,"season_number":4,"air_date":fut},"last_episode_to_air":{"season_number":3,"runtime":45},"credits":{"cast":[],"crew":[]},"videos":{"results":[]},
               "recommendations":{"results":[mk(i) for i in range(200,210)]},"external_ids":{"imdb_id":"tt999"}}
     elif re.match(r"^/movie/\d+$", path):
         n=int(path.split("/")[2])
         vids = [{"site":"YouTube","key":"trl715","type":"Trailer","official":True}] if n == 715 else []
-        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[{"id":55,"name":"Anna Skådis","character":"Lisa"}] if n == 717 else [],"crew":[]},"videos":{"results":vids},
+        body={"runtime":(80,110,150)[n%3],"overview":"Svensk","imdb_id":"tt123","credits":{"cast":[{"id":55,"name":"Anna Skådis","character":"Lisa"}] if n == 717 else [],"crew":[{"id":55,"name":"Anna Skådis","job":"Director"}] if n == 717 else []},"videos":{"results":vids},
               "recommendations":{"results":[mk(i) for i in range(200,210)]}}
     else: body={}
     route.fulfill(status=200, body=json.dumps(body), content_type="application/json")
@@ -362,7 +372,7 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("showTab('new')"); pg.wait_for_timeout(300)
     total = pg.locator("#list .item").count()
     pg.click("#btnLen"); pg.wait_for_timeout(100)
-    check(pg.locator("#lenChips [data-len]").count() == 4 and pg.locator("#lenChips").is_visible(), "Längd visar fyra val")
+    check(pg.locator("#lenChips [data-len]").count() == 5 and pg.locator("#lenChips").is_visible(), "Längd visar fem val (med Hinns före)")
     pg.click("#lenChips [data-len='short']"); pg.wait_for_timeout(1500)
     vis = pg.evaluate("[...document.querySelectorAll('#list .item:not(.lenhide)')].map(c => +c.dataset.len)")
     hid = pg.locator("#list .item.lenhide").count()
@@ -482,10 +492,17 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     titles = pg.locator("#personResults .item .t").all_inner_texts()
     check(pg.locator("#personView").evaluate("e => e.classList.contains('open')") and "Anna Skådis" in pg.locator("#personBody h2").inner_text(),
           "tryck på skådespelare öppnar hens lista")
-    check(titles == ["Serie 731", "Film 732", "Film 730", "Film 734"], f"skådespelarens titlar nyast först, utan pratshower och dubbletter ({titles})")
+    check(titles == ["Serie 731", "Film 732", "Film 730"], f"skådespelarens titlar nyast först, utan pratshower och dubbletter ({titles})")
+    up = pg.evaluate("[...document.querySelectorAll('#personUpcoming .item .t')].map(e => e.textContent)")
+    upTxt = pg.locator("#personUp").text_content()
+    check(up == ["Film 736", "Film 734"] and "Kommande (2)" in upTxt and "Premiär" in upTxt and "Inget datum än" in upTxt
+          and not pg.evaluate("document.querySelector('#personUp').open"),
+          f"kommande titlar och de utan datum ligger hopfällda i Kommande ({up})")
+    check(not any("/movie/736/" in c or "/movie/734/" in c for c in calls), "tjänster slås inte upp för kommande titlar")
+    check(pg.evaluate("document.querySelector('[data-pmine=\"0\"]').getAttribute('aria-pressed')") == "true", "filterknapparna har aria-pressed")
     pg.click("[data-pmine='1']"); pg.wait_for_timeout(200)
     mine = pg.locator("#personResults .item .t").all_inner_texts()
-    check(mine == ["Film 732", "Film 730", "Film 734"], f"filtret På mina tjänster ({mine})")
+    check(mine == ["Film 732", "Film 730"], f"filtret På mina tjänster ({mine})")
     pg.click("[data-pmine='0']"); pg.wait_for_timeout(200)
     pg.locator("#personResults .item").first.click(); pg.wait_for_timeout(500)
     check(pg.evaluate("topSheet().id") == "detail" and pg.locator("#detailBody h2").inner_text() == "Serie 731",
@@ -493,6 +510,85 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.evaluate("closeTop()")
     check(pg.evaluate("topSheet().id") == "personView", "bakåt från detaljvyn går tillbaka till skådespelarens lista")
     pg.evaluate("closeSheets()")
+
+    # Regissör: samma personvy med regi och manus.
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/717', title:'Med skådis', imageSet:{} },
+        added:{ netflix:0 }, links:{}, approx:{} })""")
+    pg.wait_for_selector("#people a.maker", timeout=3000)
+    pg.click("#people a.maker"); pg.wait_for_timeout(800)
+    crew = pg.locator("#personResults .item .t").all_inner_texts()
+    check(crew == ["Film 737"] and pg.locator("#personRole [data-pas='crew']").get_attribute("aria-pressed") == "true",
+          f"regissören öppnar personvyn med regi och manus, utan andra jobb ({crew})")
+    pg.click("#personRole [data-pas='cast']"); pg.wait_for_timeout(200)
+    check(pg.locator("#personResults .item").count() >= 2, "man kan byta till rollerna som skådespelare")
+
+    # Följ en person: det som redan finns räknas som känt, nytt ger en notis i bevakningen.
+    pg.click("#followBtn"); pg.wait_for_timeout(1200)
+    f = pg.evaluate("follows[55]")
+    check(f and f["init"] and not f["off"] and "movie/732" in f["known"] and "movie/730" in f["known"] and "tv/731" not in f["known"]
+          and "Följer" in pg.locator("#followBtn").inner_text(), f"Följ sparar personen och det som redan finns ({f and f['known']})")
+    n0 = pg.evaluate("alerts.length")
+    pg.evaluate("follows[55].known = follows[55].known.filter(k => k !== 'movie/732')")
+    fresh = pg.evaluate("checkFollow(55, follows[55], false)")
+    check(fresh == 1 and pg.evaluate("alerts[0].text") == "Ny med Anna Skådis: Film 732 finns på Netflix" and pg.evaluate("alerts.length") == n0 + 1,
+          "ny titel med en följd person ger en notis")
+    check(pg.evaluate("checkFollow(55, follows[55], false)") == 0, "samma titel ger ingen ny notis")
+    pg.evaluate("closeSheets(); $('btnBell').click()"); pg.wait_for_timeout(200)
+    check("Anna Skådis" in pg.locator("#follows").inner_text(), "bevakningen visar vem du följer")
+    pg.evaluate("syncNow()"); pg.wait_for_timeout(1000)
+    check('"follows"' in (gist["content"] or "") and '"55"' in gist["content"], "följda personer synkas i gisten")
+    remote = json.loads(gist["content"]); remote["follows"]["55"] = {"name":"Anna Skådis","off":True,"t":9e12}; gist["content"] = json.dumps(remote)
+    pg.evaluate("syncNow()"); pg.wait_for_timeout(1000)
+    check(pg.evaluate("!isFollowing(55)") and "Anna Skådis" not in pg.locator("#follows").inner_text(), "slutat följa på en annan enhet slår igenom")
+    pg.evaluate("closeSheets()")
+
+    # Skådespelarvyn slår bara upp tjänster för det som visas, och slutar när rutan stängs.
+    pg.evaluate("store.set('personMine', false)")
+    before = len(calls)
+    pg.evaluate("openPerson(56, 'Många Roller')"); pg.wait_for_timeout(1500)
+    looked = [c for c in calls[before:] if re.match(r"^/movie/30\d\d/watch/providers$", c)]
+    check(len(looked) == 36 and pg.locator("#personResults .item").count() == 36, f"bara de 36 första titlarna slås upp ({len(looked)})")
+    pg.click("#personMore button"); pg.wait_for_timeout(1200)
+    looked = [c for c in calls[before:] if re.match(r"^/movie/30\d\d/watch/providers$", c)]
+    check(len(looked) == 72 and pg.locator("#personResults .item").count() == 72, f"Visa fler slår upp nästa omgång ({len(looked)})")
+    pg.click("[data-pmine='1']"); pg.wait_for_timeout(1500)
+    shown = pg.locator("#personResults .item").count()
+    check(shown == 40 and pg.locator("#personMore").inner_text() == "", f"På mina tjänster visar bara färdiga titlar på dina tjänster ({shown})")
+    pg.evaluate("closeSheets()")
+    before = len(calls)
+    pg.evaluate("openPerson(57, 'Många Roller'); setTimeout(closeTop, 0)"); pg.wait_for_timeout(1500)
+    looked = [c for c in calls[before:] if c.endswith("/watch/providers")]
+    check(len(looked) <= 24, f"uppslagen slutar när rutan stängs ({len(looked)})")
+    pg.evaluate("store.set('personMine', false)")
+
+    # Svensk text/tal per tjänst när dina tjänster skiljer sig åt.
+    sv2 = pg.evaluate("svLangText({ netflix:{ t:true, a:false }, viaplay:{ t:false, a:false } })")
+    check(sv2 == "🇸🇪 Text: Netflix ✓, Viaplay ✗ · Inget svenskt tal", f"svensk text visas per tjänst när de skiljer sig ({sv2})")
+
+    # Sluttiden räknas om medan detaljvyn är öppen.
+    pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/716', title:'Sluttid', runtime:95, imageSet:{} },
+        added:{ netflix:0 }, links:{}, approx:{} })""")
+    pg.evaluate("$('endTime').textContent = 'gammal'; refreshEndTime()")
+    check(re.search(r"Slutar ca \d\d:\d\d", pg.locator("#endTime").inner_text()) is not None, "sluttiden räknas om")
+    pg.evaluate("closeSheets()")
+
+    # Hinns före: tiden räknas till i dag, eller i morgon om den ligger långt bakåt.
+    check(pg.evaluate("""() => { store.set('fitsBy', '23:00'); const d = h => { const x = new Date(); x.setHours(h, 30, 0, 0); return x.getTime(); };
+        const t23 = new Date(d(22)); t23.setHours(23, 0, 0, 0);
+        const ok1 = fitsDeadline(d(22)) === t23.getTime() && fitsDeadline(d(23)) === t23.getTime();
+        store.set('fitsBy', '01:00'); const t1 = new Date(d(23)); t1.setDate(t1.getDate() + 1); t1.setHours(1, 0, 0, 0);
+        const ok2 = fitsDeadline(d(23)) === t1.getTime();
+        return ok1 && ok2; }"""), "Hinns före räknar ut rätt klockslag")
+    pg.evaluate("showTab('new')"); pg.wait_for_timeout(300)
+    pg.evaluate("""() => { const t = new Date(Date.now() + 100*6e4); store.set('fitsBy', String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0')); }""")
+    pg.click("#btnLen"); pg.wait_for_timeout(100); pg.click("#lenChips [data-len='fits']")
+    pg.wait_for_timeout(2500)
+    vis = pg.evaluate("[...document.querySelectorAll('#list .item:not(.lenhide)')].map(c => [c.dataset.kind, fitsMinutes(c.dataset.kind, c.dataset.tid, c.dataset.len)])")
+    hid = pg.evaluate("[...document.querySelectorAll('#list .item.lenhide')].map(c => fitsMinutes(c.dataset.kind, c.dataset.tid, c.dataset.len))")
+    note = pg.evaluate("document.querySelector('#list + .lenNote')?.textContent || ''")
+    check(vis and all(0 < m <= 100 for _, m in vis) and any(m > 100 for m in hid) and "hinns inte före" in note
+          and pg.locator("#fitsBy").is_visible(), f"Hinns före visar bara det som slutar i tid ({vis[:5]}, {note})")
+    pg.evaluate("setLen('all')")
 
     # TV-start sparar vad som startades (med påhittad TvBridge).
     tv = ctx.new_page(); tv.on("pageerror", lambda e: errs.append("JS: "+str(e)))

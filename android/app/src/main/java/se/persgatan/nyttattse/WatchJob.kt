@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit
  * Bakgrundskoll av bevakningen (ungefär två gånger per dygn, när telefonen har nät):
  *  - titlar i "Vill se" som dykt upp på någon av dina tjänster
  *  - serier du sett eller vill se som fått en ny säsong
+ *  - nya titlar med personer du följer som finns på dina tjänster
  * Webbappen lämnar över listan via TvBridge.setWatch(); här används bara TMDB.
  */
 class WatchJob : JobService() {
@@ -91,22 +92,9 @@ object WatchChecker {
             val w = want.getJSONObject(i)
             val id = w.optString("id")
             val before = w.optJSONArray("svcs").strings()
-            val res = tmdb(key, "/$id/watch/providers") ?: continue
-            val se = res.optJSONObject("results")?.optJSONObject("SE") ?: JSONObject()
-            val names = mutableListOf<String>()
-            for (t in listOf("flatrate", "free", "ads")) se.optJSONArray(t)?.let { a ->
-                for (j in 0 until a.length()) names += a.getJSONObject(j).optString("provider_name").trim()
-            }
-            val now = mutableListOf<String>()
-            val newLabels = mutableListOf<String>()
-            for (j in 0 until services.length()) {
-                val s = services.getJSONObject(j)
-                val re = try { Regex(s.optString("pattern"), RegexOption.IGNORE_CASE) } catch (_: Exception) { continue }
-                if (names.any { re.matches(it) }) {
-                    now += s.optString("key")
-                    if (s.optString("key") !in before) newLabels += s.optString("label")
-                }
-            }
+            val avail = servicesFor(key, id, services) ?: continue
+            val now = avail.map { it.first }
+            val newLabels = avail.filter { it.first !in before }.map { it.second }
             val added = now.filter { it !in before }
             if (added.isNotEmpty()) {
                 val nid = "avail|$id|" + added.joinToString(",")
@@ -132,6 +120,49 @@ object WatchChecker {
                 s.put("seasons", aired)
             }
         }
+
+        // Personer du följer: nya titlar med hen som finns på dina tjänster.
+        val people = cfg.optJSONArray("people") ?: JSONArray()
+        val today = java.time.LocalDate.now().toString()
+        for (i in 0 until people.length()) {
+            if (Thread.currentThread().isInterrupted) return
+            val p = people.getJSONObject(i)
+            val pid = p.optLong("id")
+            if (pid <= 0) continue
+            val known = p.optJSONArray("known").strings().toMutableSet()
+            val res = tmdb(key, "/person/$pid/combined_credits?language=sv-SE") ?: continue
+            try {
+                for (c in PersonCredits.recent(res, today).filter { it.id !in known }) {
+                    if (Thread.currentThread().isInterrupted) return
+                    val avail = servicesFor(key, c.id, services) ?: continue
+                    if (avail.isEmpty()) continue
+                    known += c.id
+                    val nid = "person|$pid|${c.id}"
+                    if (notified.add(nid)) notify(ctx, nid.hashCode(),
+                        "Ny med ${p.optString("name")}: ${c.title} finns på ${avail.joinToString(" och ") { it.second }}",
+                        "Från en person du följer. Tryck för att öppna Nytt att se.")
+                }
+            } finally {
+                p.put("known", JSONArray(known.toList().takeLast(200)))
+            }
+        }
+    }
+
+    /** Vilka av dina tjänster titeln finns på (nyckel, namn) – null om TMDB inte svarade. */
+    private fun servicesFor(key: String, id: String, services: JSONArray): List<Pair<String, String>>? {
+        val res = tmdb(key, "/$id/watch/providers") ?: return null
+        val se = res.optJSONObject("results")?.optJSONObject("SE") ?: JSONObject()
+        val names = mutableListOf<String>()
+        for (t in listOf("flatrate", "free", "ads")) se.optJSONArray(t)?.let { a ->
+            for (j in 0 until a.length()) names += a.getJSONObject(j).optString("provider_name").trim()
+        }
+        val out = mutableListOf<Pair<String, String>>()
+        for (j in 0 until services.length()) {
+            val s = services.getJSONObject(j)
+            val re = try { Regex(s.optString("pattern"), RegexOption.IGNORE_CASE) } catch (_: Exception) { continue }
+            if (names.any { re.matches(it) }) out += s.optString("key") to s.optString("label")
+        }
+        return out
     }
 
     private fun JSONArray?.strings(): List<String> =
@@ -167,5 +198,38 @@ object WatchChecker {
             .setAutoCancel(true)
             .build()
         nm.notify(id, n)
+    }
+}
+
+/**
+ * De senaste utgivna titlarna med en person (som i webbappen): filmer och serier där hen spelar
+ * (inte pratshower eller "sig själv") eller har regi, manus eller skapat serien. Nyast först.
+ */
+object PersonCredits {
+    data class Credit(val id: String, val title: String, val date: String)
+
+    private val crewJobs = setOf("Director", "Creator", "Screenplay", "Writer", "Showrunner")
+    private val selfRole = Regex("^(self|himself|herself|themselves|sig själv)\\b", RegexOption.IGNORE_CASE)
+
+    fun recent(res: JSONObject, today: String, max: Int = 20): List<Credit> {
+        val byId = LinkedHashMap<String, Credit>()
+        fun add(a: JSONArray?, ok: (JSONObject) -> Boolean) {
+            if (a == null) return
+            for (i in 0 until a.length()) {
+                val x = a.optJSONObject(i) ?: continue
+                val type = x.optString("media_type")
+                if (type != "movie" && type != "tv") continue
+                val genres = x.optJSONArray("genre_ids")
+                if (genres != null && (0 until genres.length()).any { genres.optInt(it) == 10767 || genres.optInt(it) == 10763 }) continue
+                if (!ok(x)) continue
+                val date = x.optString("release_date").ifEmpty { x.optString("first_air_date") }
+                if (date.isEmpty() || date > today) continue
+                val id = "$type/${x.optLong("id")}"
+                if (id !in byId) byId[id] = Credit(id, x.optString("title").ifEmpty { x.optString("name") }, date)
+            }
+        }
+        add(res.optJSONArray("cast")) { !selfRole.containsMatchIn(it.optString("character").trim()) }
+        add(res.optJSONArray("crew")) { it.optString("job") in crewJobs }
+        return byId.values.sortedByDescending { it.date }.take(max)
     }
 }

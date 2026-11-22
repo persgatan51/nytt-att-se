@@ -98,6 +98,18 @@
   .phead{display:flex;gap:12px;align-items:center}
   .phead img{width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--card);flex:none}
   .wrapchips button.on{background:var(--acc);color:#111;border-color:var(--acc)}
+  #lenChips{flex-wrap:wrap;align-items:center}
+  .fitsTime{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
+  .fitsTime input{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:4px 6px;font:inherit}
+  .actions a#followBtn{display:inline-block;padding:6px 14px;font-weight:500}
+  .linkbtn{background:none;border:0;color:var(--acc);text-decoration:underline;font:inherit;padding:6px}
+  #personUp{margin:10px 0;border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+  #personUp summary{cursor:pointer;font-weight:600}
+  #personUpcoming{align-items:start}
+  #people a.maker{color:var(--fg);text-decoration:underline;text-decoration-color:var(--mut);text-underline-offset:2px}
+  #follows{margin-top:12px}
+  #follows .fol{display:flex;align-items:center;gap:8px;padding:4px 0}
+  #follows .fol a{flex:1;color:var(--fg)}
   .actions a.primary{background:var(--acc);color:#111;border-color:var(--acc)}
   .actions a.netflix{background:#e50914;border-color:#e50914}
   .actions a.prime{background:#00a8e1;border-color:#00a8e1;color:#001}
@@ -271,7 +283,8 @@
     <a href="#" id="clearAlerts">Rensa alla</a>
     <a href="#" id="closeAlerts">Stäng</a>
   </div>
-  <p class="tip">Bevakningen säger till när något på Vill se dyker upp på dina tjänster eller snart försvinner, och när serier du sett eller vill se får en ny säsong (inte serier du gett 👎).</p>
+  <div id="follows"></div>
+  <p class="tip">Bevakningen säger till när något på Vill se dyker upp på dina tjänster eller snart försvinner, när serier du sett eller vill se får en ny säsong (inte serier du gett 👎) och när det kommit något nytt med en person du följer.</p>
 </div></div></div>
 
 <div class="sheet" id="filters"><div class="panel"><div class="pad">
@@ -596,13 +609,18 @@ function svLangFromShow(show){
   return out;
 }
 // Text till detaljvyn, bara för dina tjänster. Tom om inget är känt.
+// Skiljer sig tjänsterna åt visas det per tjänst, t.ex. "Text: Netflix ✓, Max ✗".
 function svLangText(langs){
   const mine = Object.entries(langs || {}).filter(([k, v]) => cfg.services.includes(k) && v && typeof v === "object");
   if (!mine.length) return "";
-  const known = f => mine.some(([, v]) => v[f] === true) ? true : mine.some(([, v]) => v[f] === false) ? false : null;
-  const t = known("t"), a = known("a");
-  const parts = [t === true ? "Svensk text" : t === false ? "Ingen svensk text" : "",
-                 a === true ? "Svenskt tal" : a === false ? "Inget svenskt tal" : ""].filter(Boolean);
+  const part = (f, yes, no, short) => {
+    const known = mine.filter(([, v]) => v[f] === true || v[f] === false);
+    if (!known.length) return "";
+    if (known.every(([, v]) => v[f] === true)) return yes;
+    if (known.every(([, v]) => v[f] === false)) return no;
+    return short + ": " + known.map(([k, v]) => `${SERVICES.find(x => x.key === k)?.label || k} ${v[f] ? "✓" : "✗"}`).join(", ");
+  };
+  const parts = [part("t", "Svensk text", "Ingen svensk text", "Text"), part("a", "Svenskt tal", "Inget svenskt tal", "Tal")].filter(Boolean);
   return parts.length ? "🇸🇪 " + parts.join(" · ") : "";
 }
 
@@ -779,7 +797,20 @@ const LENS = {
   short: { all:"Kort", movie:"Under 1,5 h", series:"1 säsong", hint:"Film under 1,5 h eller serie med 1 säsong" },
   mid:   { all:"Mellan", movie:"1,5–2 h", series:"2–3 säsonger", hint:"Film 1,5–2 h eller serie med 2–3 säsonger" },
   long:  { all:"Lång", movie:"Över 2 h", series:"4+ säsonger", hint:"Film över 2 h eller serie med 4 säsonger eller fler" },
+  fits:  { all:"⏰ Hinns före", movie:"⏰ Hinns före", series:"⏰ Hinns före", hint:"Filmer, och serier där ett avsnitt, som slutar före vald tid om du startar nu" },
 };
+// Avsnittslängd i minuter för serier (till "Hinns före"); 0 = okänd.
+const epCache = new Map();
+// "Hinns före": vald klockslag (HH:MM) och när det infaller. Är klockan redan förbi tiden (men mindre än 12 h)
+// hinns inget; ligger tiden mer än 12 h bakåt menas i morgon, t.ex. 01:00 när klockan är 23:30.
+const fitsTime = () => /^\d\d:\d\d$/.test(store.get("fitsBy", "")) ? store.get("fitsBy", "") : "23:00";
+function fitsDeadline(now = Date.now()){
+  const [h, m] = fitsTime().split(":").map(Number), d = new Date(now); d.setHours(h, m, 0, 0);
+  let t = d.getTime();
+  if (t < now && now - t > 12*36e5) t += 864e5;
+  return t;
+}
+const fitsMinutes = (kind, tid, len) => kind === "series" ? epCache.get(tid) || 0 : (+len || lenCache.get(tid) || 0);
 const lenBucket = (type, n) => !n ? null : type === "series" ? (n <= 1 ? "short" : n <= 3 ? "mid" : "long")
                                                             : (n <= 90 ? "short" : n <= 120 ? "mid" : "long");
 const poster = s => s.imageSet?.verticalPoster?.w360 || s.imageSet?.verticalPoster?.w240 || "";
@@ -788,6 +819,8 @@ const svcLabel = k => SERVICES.find(s=>s.key===k)?.label || esc(k);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 // Länkar från API:er och den synkade gisten: bara http(s), aldrig javascript: o.d.
 const safeUrl = u => /^https?:\/\//i.test(String(u ?? "")) ? String(u) : "";
+// Följda personer (se "Följ en person" längre ner).
+let follows = cleanFollows(store.get("follows", {}));
 const fmtDay = ts => new Date(ts*1000).toLocaleDateString("sv-SE",{ weekday:"long", day:"numeric", month:"long" });
 function dayLabel(ts){
   const d = new Date(ts*1000); d.setHours(0,0,0,0);
@@ -952,12 +985,14 @@ async function loadExtras(s){
     const cast = (j.credits?.cast || []).slice(0,8).map(c=>({ id:c.id, name:c.name, role:c.character }));
     // Längden följer med gratis – spara den för längdfiltret.
     const n = Math.round(+(s.tmdbId.startsWith("tv/") ? j.number_of_seasons : j.runtime)) || 0;
-    if (n){ lenCache.set(s.tmdbId, n); bigCache.set("len|"+s.tmdbId, { t:Date.now(), n, d:j.release_date || j.first_air_date || "" }); }
-    // Avsnittslängd för serier (till "Slutar ca …"): senaste avsnittet, annars TMDB:s typiska längd.
-    const epMin = Math.round(+(j.last_episode_to_air?.runtime || j.next_episode_to_air?.runtime || (j.episode_run_time || [])[0])) || 0;
+    // Avsnittslängd för serier (till "Slutar ca …" och "Hinns före"): senaste avsnittet, annars TMDB:s typiska längd.
+    const epMin = epRuntime(j);
+    if (s.tmdbId.startsWith("tv/")) epCache.set(s.tmdbId, epMin);
+    if (n) lenCache.set(s.tmdbId, n);
+    if (n || epMin) bigCache.set("len|"+s.tmdbId, { t:Date.now(), n, e:epMin, d:j.release_date || j.first_air_date || "" });
     const makers = s.tmdbId.startsWith("movie/")
-      ? (j.credits?.crew || []).filter(c=>c.job==="Director").map(c=>c.name)
-      : (j.created_by || []).map(c=>c.name);
+      ? (j.credits?.crew || []).filter(c=>c.job==="Director").map(c=>({ id:c.id, name:c.name }))
+      : (j.created_by || []).map(c=>({ id:c.id, name:c.name }));
     const vids = (j.videos?.results || []).filter(v=>v.site==="YouTube" && v.key);
     const score = v => (v.type==="Trailer"?4:v.type==="Teaser"?2:0) + (v.official?1:0) + (v.iso_639_1==="sv"?0.5:0);
     const best = vids.sort((a,b)=>score(b)-score(a))[0];
@@ -1032,10 +1067,12 @@ function openDetail(id,it){
     if (!ex || !document.getElementById("detail").classList.contains("open")) return;
     if (ex.sv) $("overview").textContent = ex.sv;
     const ppl = [];
-    if (ex.makers.length) ppl.push(`<div><b>${s.showType==="series"?"Skapad av":"Regi"}:</b> ${esc(ex.makers.join(", "))}</div>`);
+    // Regissörer och serieskapare öppnar samma personvy, med regi och manus.
+    if (ex.makers.length) ppl.push(`<div><b>${s.showType==="series"?"Skapad av":"Regi"}:</b> ${ex.makers.map(m=>m.id ? `<a href="#" class="maker" data-pid="${+m.id}">${esc(m.name)}</a>` : esc(m.name)).join(", ")}</div>`);
     if (ex.cast.length) ppl.push(`<div><b>Skådespelare:</b> ${ex.cast.map(c=>(c.id ? `<a href="#" class="person" data-pid="${+c.id}">${esc(c.name)}</a>` : esc(c.name))+(c.role?` <span style="opacity:.7">(${esc(c.role)})</span>`:"")).join(", ")}</div>`);
     if (ppl.length) $("people").innerHTML = ppl.join("");
     $("people").querySelectorAll("a.person").forEach(a => a.onclick = e => { e.preventDefault(); openPerson(+a.dataset.pid, a.textContent); });
+    $("people").querySelectorAll("a.maker").forEach(a => a.onclick = e => { e.preventDefault(); openPerson(+a.dataset.pid, a.textContent, "crew"); });
     if (ex.trailer) $("trailerSlot").innerHTML = (TV && tvInfo().paired
         ? `<a href="#" class="tv trailer" data-svc="youtube" data-trailer="1" data-url="${esc(ex.trailer)}">📺 Trailer på TV</a>` : "") +
       `<a class="trailer" href="${esc(ex.trailer)}" target="_blank" rel="noopener">🎬 Se trailer</a>`;
@@ -1052,10 +1089,18 @@ function endTimeText(s, epMin){
   const end = new Date(Date.now() + min * 6e4).toLocaleTimeString("sv-SE", { hour:"2-digit", minute:"2-digit" });
   return s.showType === "series" ? `⏰ Ett avsnitt (${min} min) slutar ca ${end} om du startar nu` : `⏰ Slutar ca ${end} om du startar nu`;
 }
+let endTimeCur = null;   // { s, epMin } för den öppna detaljvyn – räknas om varje minut
 function showEndTime(s, epMin){
   const el = $("endTime"); if (!el || $("detail").dataset.cur !== (s.tmdbId || "")) return;
+  if (epMin == null && endTimeCur?.s === s) epMin = endTimeCur.epMin;
+  endTimeCur = { s, epMin };
   const txt = endTimeText(s, epMin); if (txt || !el.textContent) el.textContent = txt;
 }
+function refreshEndTime(){
+  if (endTimeCur && $("detail").classList.contains("open") && !document.hidden) showEndTime(endTimeCur.s, endTimeCur.epMin);
+}
+setInterval(refreshEndTime, 60e3);
+document.addEventListener("visibilitychange", refreshEndTime);
 
 // Liknande titlar (TMDB-rekommendationer), bara de som finns på dina tjänster och som du inte sett/tagit bort.
 async function renderSimilar(s, recs){
@@ -1266,66 +1311,132 @@ async function myServicesFor(tmdbId, fresh=false){
   return (providerCache[tmdbId] = keys);
 }
 
-// ---------- Skådespelare: allt hen medverkat i, nyast först ----------
+// ---------- Personer: allt en skådespelare (eller regissör/serieskapare) medverkat i, nyast först ----------
 // Ett TMDB-anrop (person + combined_credits). Pratshower, nyheter och roller som "sig själv" räknas inte.
+// Tjänsterna slås bara upp för de titlar som visas (36 åt gången, fler när man skrollar), eller för alla
+// när man väljer "På mina tjänster". Kommande titlar (och de utan datum) ligger i en egen hopfälld grupp.
 const personCache = {};
 let personSeq = 0;
 const creditDate = x => x.release_date || x.first_air_date || "";
+const PERSON_PAGE = 36;
+const CREW_JOBS = { Director:"Regi", Creator:"Skapare", Screenplay:"Manus", Writer:"Manus", Showrunner:"Skapare" };
+const creditOk = x => (x.media_type === "movie" || x.media_type === "tv") && !(x.genre_ids || []).some(g => g === 10767 || g === 10763);
 function personCredits(cast){
   const seen = new Set();
   return (cast || [])
-    .filter(x => (x.media_type === "movie" || x.media_type === "tv")
-      && !(x.genre_ids || []).some(g => g === 10767 || g === 10763)
+    .filter(x => creditOk(x)
       && !/^(self|himself|herself|themselves|sig själv)\b/i.test((x.character || "").trim())
       && !seen.has(x.media_type + x.id) && seen.add(x.media_type + x.id))
-    // Nyast först; titlar utan datum (oftast ej klara) hamnar sist.
     .sort((a, b) => (creditDate(b) || "0").localeCompare(creditDate(a) || "0"));
 }
-async function openPerson(pid, name){
-  if (!pid) return;
+// Regi, manus och skapare – en post per titel med alla jobb (t.ex. "Regi, Manus").
+function crewCredits(crew){
+  const by = new Map();
+  for (const x of crew || []){
+    const job = CREW_JOBS[x.job]; if (!job || !creditOk(x)) continue;
+    const k = x.media_type + x.id, c = by.get(k);
+    if (c){ if (!c.jobs.includes(job)) c.jobs.push(job); } else by.set(k, { ...x, jobs:[job] });
+  }
+  return [...by.values()].sort((a, b) => (creditDate(b) || "0").localeCompare(creditDate(a) || "0"));
+}
+// Delar upp i utgivet (nyast först) och kommande (närmast först, utan datum sist).
+function splitUpcoming(items, today = dayKey()){
+  const out = [], up = [];
+  for (const it of items) (it.date && it.date <= today ? out : up).push(it);
+  up.sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+  return { out, up };
+}
+const premText = d => !d ? "Inget datum än" : "Premiär " + (d.length >= 10
+  ? new Date(d + "T12:00").toLocaleDateString("sv-SE", { day:"numeric", month:"long", year:"numeric" }) : d.slice(0, 4));
+function personItems(list, role){
+  return list.map(x => { const it = searchItem(x); it.date = creditDate(x); it.role = role(x); return it; });
+}
+async function openPerson(pid, name, as = "cast"){
+  pid = +pid; if (!pid) return;
   const seq = ++personSeq, body = $("personBody");
-  let onlyMine = store.get("personMine", false);
-  body.innerHTML = `<h2>${esc(name || "Skådespelare")}</h2><div class="msg">Hämtar filmer och serier…</div>`;
+  let onlyMine = store.get("personMine", false), limit = PERSON_PAGE, upOpen = false, filling = false, obs = null;
+  body.innerHTML = `<h2>${esc(name || "Person")}</h2><div class="msg">Hämtar filmer och serier…</div>`;
   $("personBody").parentElement.scrollTop = 0;
   openSheet($("personView"));
   let d = personCache[pid];
   try{
     if (!d){
       const j = await tmdbGet(`/person/${pid}`, { language:"sv-SE", append_to_response:"combined_credits" });
-      d = personCache[pid] = { name:j.name || name, photo:j.profile_path ? "https://image.tmdb.org/t/p/w185"+j.profile_path : null,
-        born:j.birthday || "", items:personCredits(j.combined_credits?.cast).map(x => {
-          const it = searchItem(x); it.role = x.character || ""; return it; }) };
+      d = personCache[pid] = { id:pid, name:String(j.name || name || ""), photo:j.profile_path ? "https://image.tmdb.org/t/p/w185"+j.profile_path : null,
+        born:j.birthday || "",
+        cast:personItems(personCredits(j.combined_credits?.cast), x => x.character || ""),
+        crew:personItems(crewCredits(j.combined_credits?.crew), x => x.jobs.join(", ")) };
+      for (const it of [...d.cast, ...d.crew]) if (!(it.date && it.date <= dayKey())) it.pending = false;   // kommande slås inte upp
     }
   }catch(e){ if (seq === personSeq) body.innerHTML = `<h2>${esc(name || "")}</h2><div class="msg">${esc(e.message)}</div>`; return; }
   if (seq !== personSeq) return;
+  if (as === "crew" ? !d.crew.length : !d.cast.length) as = d.crew.length && !d.cast.length ? "crew" : d.cast.length ? "cast" : as;
+  const alive = () => seq === personSeq && $("personView").classList.contains("open");
+  const lists = () => splitUpcoming(as === "crew" ? d.crew : d.cast);
+  const has = it => Object.keys(it.added).length > 0;
+  // Titlar vars tjänster behövs just nu: alla utgivna i "På mina tjänster", annars de som visas.
+  const needed = () => { const { out } = lists(); return (onlyMine ? out : out.slice(0, limit)).filter(it => it.pending); };
+  async function fill(){
+    if (filling) return; filling = true;
+    try{
+      for (let todo = needed(); todo.length && alive(); todo = needed()){
+        await fillServices(todo.slice(0, 24));
+        if (!alive()) return;
+        draw();
+      }
+    } finally { filling = false; }
+  }
   const draw = () => {
-    if (seq !== personSeq || !$("personView").classList.contains("open")) return;
-    const items = onlyMine ? d.items.filter(it => it.pending || Object.keys(it.added).length) : d.items;
-    const nMovie = d.items.filter(it => it.show.showType === "movie").length;
+    if (!alive()) return;
+    const { out, up } = lists(), all = as === "crew" ? d.crew : d.cast;
+    const checking = onlyMine ? out.filter(it => it.pending).length : 0;
+    const shown = onlyMine ? out.filter(it => !it.pending && has(it)) : out.slice(0, limit);
+    const nMovie = all.filter(it => it.show.showType === "movie").length, nTv = all.length - nMovie;
+    const fol = isFollowing(pid);
+    const chip = (attr, val, on, txt) => `<button ${attr}="${val}" class="${on ? "on" : ""}" aria-pressed="${on}">${txt}</button>`;
+    obs?.disconnect(); obs = null;
     body.innerHTML = `
       <div class="phead">${d.photo ? `<img alt="" src="${esc(d.photo)}">` : ""}<div>
         <h2>${esc(d.name)}</h2>
-        <div class="m">${nMovie} ${nMovie === 1 ? "film" : "filmer"} · ${d.items.length - nMovie} ${d.items.length - nMovie === 1 ? "serie" : "serier"}${d.born ? ` · född ${esc(d.born.slice(0,4))}` : ""}</div></div></div>
-      <div class="wrapchips" id="personFilter">
-        <button data-pmine="0" class="${onlyMine ? "" : "on"}">Alla</button>
-        <button data-pmine="1" class="${onlyMine ? "on" : ""}">På mina tjänster</button>
-      </div>
+        <div class="m">${nMovie} ${nMovie === 1 ? "film" : "filmer"} · ${nTv} ${nTv === 1 ? "serie" : "serier"}${d.born ? ` · född ${esc(d.born.slice(0,4))}` : ""}</div>
+        <div class="actions" style="margin-top:6px"><a href="#" id="followBtn" class="${fol ? "on" : ""}" aria-pressed="${fol}">${fol ? "★ Följer" : "☆ Följ"}</a></div></div></div>
+      ${d.cast.length && d.crew.length ? `<div class="wrapchips" id="personRole">${chip("data-pas", "cast", as === "cast", `Skådespelare (${d.cast.length})`)}${chip("data-pas", "crew", as === "crew", `Regi och manus (${d.crew.length})`)}</div>` : ""}
+      <div class="wrapchips" id="personFilter">${chip("data-pmine", "0", !onlyMine, "Alla")}${chip("data-pmine", "1", onlyMine, "På mina tjänster")}</div>
+      ${up.length ? `<details id="personUp"${upOpen ? " open" : ""}><summary>📅 Kommande (${up.length})</summary><div class="hrow" id="personUpcoming" style="margin-top:8px"></div></details>` : ""}
       <p class="m">Nyast först.</p>
       <div class="grid" id="personResults"></div>
-      ${items.length ? "" : `<div class="msg">${onlyMine ? "Inget av det finns på dina tjänster." : "Hittade inga filmer eller serier."}</div>`}`;
+      <div id="personMore" class="m" aria-live="polite" style="text-align:center;padding:10px"></div>
+      ${shown.length || checking ? "" : `<div class="msg">${onlyMine ? "Inget av det finns på dina tjänster." : "Hittade inga utgivna filmer eller serier."}</div>`}`;
     const g = $("personResults");
-    items.forEach(it => g.appendChild(card("tmdb:" + it.show.tmdbId, it)));
+    shown.forEach(it => g.appendChild(card("tmdb:" + it.show.tmdbId, it)));
+    const ug = $("personUpcoming");
+    if (ug) up.forEach(it => {
+      const c = card("tmdb:" + it.show.tmdbId, it);
+      c.classList.remove("dim"); c.querySelector(".badges").innerHTML = `<span class="m">📅 ${esc(premText(it.date))}</span>`;
+      ug.appendChild(c);
+    });
+    $("personUp")?.addEventListener("toggle", e => { upOpen = e.target.open; });
+    const more = $("personMore");
+    if (checking) more.textContent = `Kollar ${out.length - checking} av ${out.length} titlar…`;
+    else if (!onlyMine && out.length > limit){
+      more.innerHTML = `<button type="button" class="linkbtn">Visa fler (${out.length - limit} till)</button>`;
+      const grow = () => { if (!alive() || limit >= out.length) return; limit += PERSON_PAGE; draw(); fill(); };
+      more.querySelector("button").onclick = grow;
+      // Fler laddas automatiskt när man skrollar ner till slutet.
+      if ("IntersectionObserver" in window){
+        obs = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)){ obs?.disconnect(); obs = null; grow(); } },
+          { root:$("personBody").parentElement, rootMargin:"300px" });
+        obs.observe(more);
+      }
+    }
     body.querySelectorAll("[data-pmine]").forEach(b => b.onclick = () => {
-      onlyMine = b.dataset.pmine === "1"; store.set("personMine", onlyMine); draw(); });
+      onlyMine = b.dataset.pmine === "1"; store.set("personMine", onlyMine); draw(); fill(); });
+    body.querySelectorAll("[data-pas]").forEach(b => b.onclick = () => { as = b.dataset.pas; limit = PERSON_PAGE; draw(); fill(); });
+    $("followBtn").onclick = e => { e.preventDefault(); toggleFollow(d); draw(); };
   };
   redraws.personView = draw;
   draw();
-  const todo = d.items.filter(it => it.pending);
-  for (let i = 0; i < todo.length; i += 24){
-    await fillServices(todo.slice(i, i + 24));
-    if (seq !== personSeq) return;
-    draw();
-  }
+  fill();
 }
 
 function searchItem(x, type){
@@ -1948,6 +2059,11 @@ async function runWatch(force=false){
         }
       }catch{}
     }));
+    for (const [pid, f] of Object.entries(follows)){
+      if (f.off) continue;
+      try{ fresh += await checkFollow(pid, f, !f.init); }catch{}
+    }
+    store.set("follows", follows);
     try{
       const exp = await expiringList();
       for (const x of exp?.items || []){
@@ -1973,8 +2089,73 @@ function exportWatch(){
     if ((m.status === "want" || (m.status === "seen" && m.rating !== "down")) && s.showType === "series" && s.tmdbId.startsWith("tv/") && m.seasons != null)
       series.push({ id:s.tmdbId, title:s.title, seasons:m.seasons });
   }
-  try{ TV.setWatch(JSON.stringify({ key:cfg.tmdbKey, services:mine().map(s => ({ key:s.key, label:s.label, pattern:s.match.source })), want, series })); }
+  // Följda personer: bara de som kollats en gång (init), så att det som redan fanns inte ger notis.
+  const people = Object.entries(follows).filter(([, f]) => !f.off && f.init).map(([id, f]) => ({ id:+id, name:f.name, known:f.known }));
+  try{ TV.setWatch(JSON.stringify({ key:cfg.tmdbKey, services:mine().map(s => ({ key:s.key, label:s.label, pattern:s.match.source })), want, series, people })); }
   catch(e){ console.warn("setWatch:", e); }
+}
+
+// ---------- Följ en person: säger till när en ny titel med hen finns på dina tjänster ----------
+// { [personId]: { name, photo, t, known:[tmdbId som redan fanns på dina tjänster], init, off } }
+// off = slutat följa (sparas med tid, så att synken mellan enheter vet vilken ändring som är senast).
+const FOLLOW_RECENT = 20;   // så många av de senaste utgivna titlarna kollas (1 + högst 20 TMDB-anrop per person)
+function cleanFollow(f){
+  if (!f || typeof f !== "object") return null;
+  const tid = /^(movie|tv)\/\d+$/;
+  return { name:String(f.name || "").slice(0, 100), photo:safeUrl(f.photo) || null, t:+f.t || 0, init:!!f.init, off:!!f.off,
+           known:(Array.isArray(f.known) ? f.known : []).filter(k => typeof k === "string" && tid.test(k)).slice(-200) };
+}
+function cleanFollows(o){
+  const out = {};
+  for (const [k, f] of Object.entries(o && typeof o === "object" ? o : {})){ const c = cleanFollow(f); if (/^\d+$/.test(k) && c) out[k] = c; }
+  return out;
+}
+const isFollowing = pid => !!follows[pid] && !follows[pid].off;
+function saveFollows(){ store.set("follows", follows); queueSync(); renderFollows(); exportWatch(); }
+async function toggleFollow(d){
+  if (isFollowing(d.id)){
+    follows[d.id] = { ...follows[d.id], off:true, t:Date.now() };
+    saveFollows(); toast(`Följer inte längre ${d.name}`); return;
+  }
+  // Det som redan finns på dina tjänster räknas som känt, så att bara nytt ger en notis.
+  const known = [...d.cast, ...d.crew].filter(it => !it.pending && Object.keys(it.added).length).map(it => it.show.tmdbId);
+  const f = follows[d.id] = { name:d.name, photo:d.photo, t:Date.now(), known:[...new Set(known)], init:false, off:false };
+  saveFollows(); toast(`Följer ${d.name} 🎭 Du får veta när något nytt med hen finns på dina tjänster.`);
+  try{ await checkFollow(d.id, f, true); saveFollows(); }catch{}
+}
+// Kollar de senaste utgivna titlarna med personen. silent = första gången: bara lär sig vad som redan finns.
+async function checkFollow(pid, f, silent){
+  const j = await tmdbGet(`/person/${pid}/combined_credits`, { language:"sv-SE" });
+  const today = dayKey(), seen = new Set();
+  const list = [...personCredits(j.cast), ...crewCredits(j.crew)]
+    .filter(x => creditDate(x) && creditDate(x) <= today && !seen.has(x.media_type + x.id) && seen.add(x.media_type + x.id))
+    .sort((a, b) => creditDate(b).localeCompare(creditDate(a))).slice(0, FOLLOW_RECENT)
+    .map(x => searchItem(x)).filter(it => !f.known.includes(it.show.tmdbId));
+  let fresh = 0;
+  for (let i = 0; i < list.length; i += 8) await Promise.all(list.slice(i, i + 8).map(async it => {
+    try{
+      const svcs = await myServicesFor(it.show.tmdbId);
+      if (!svcs.length) return;
+      f.known.push(it.show.tmdbId);
+      const mk = marks[it.show.tmdbId]?.status;
+      if (silent || mk === "seen" || mk === "hidden") return;
+      if (addAlert({ id:`person|${pid}|${it.show.tmdbId}`, key:it.show.tmdbId, kind:"person",
+          text:`Ny med ${f.name}: ${it.show.title} finns på ${svcs.map(svcLabel).join(" och ")}`, item:alertItem(it, svcs) })) fresh++;
+    }catch{}
+  }));
+  f.known = [...new Set(f.known)].slice(-200);
+  f.init = true;
+  return fresh;
+}
+function renderFollows(){
+  const el = $("follows"); if (!el) return;
+  const list = Object.entries(follows).filter(([, f]) => !f.off).sort((a, b) => a[1].name.localeCompare(b[1].name, "sv"));
+  if (!list.length){ el.innerHTML = `<p class="tip">🎭 Följ en skådespelare eller regissör (tryck på namnet i en titel) så säger bevakningen till när något nytt med hen finns på dina tjänster.</p>`; return; }
+  el.innerHTML = `<h3>🎭 Du följer</h3>` + list.map(([pid, f]) =>
+    `<div class="fol"><a href="#" data-fpid="${+pid}">${esc(f.name)}</a><button data-funf="${+pid}" aria-label="Sluta följa ${esc(f.name)}">✕</button></div>`).join("");
+  el.querySelectorAll("[data-fpid]").forEach(a => a.onclick = e => { e.preventDefault(); openPerson(+a.dataset.fpid, a.textContent); });
+  el.querySelectorAll("[data-funf]").forEach(b => b.onclick = () => {
+    const pid = b.dataset.funf; follows[pid] = { ...follows[pid], off:true, t:Date.now() }; saveFollows(); });
 }
 
 // ---------- För dig: rekommendationer utifrån det du markerat ----------
@@ -2128,14 +2309,14 @@ async function syncNow(){
   if (syncBusy){ syncAgain = true; return; }   // körs igen när den pågående synken är klar
   syncBusy = true; syncAgain = false; setSyncStatus("Synkar…");
   try{
-    let id = await findGist(), remote = {};
+    let id = await findGist(), remote = {}, remoteFollows = {};
     if (id){
       let g;
       try{ g = await gh("/gists/"+id); }catch(e){ store.set("gistId", null); throw e; }
       const f = g.files?.[GIST_FILE];
       if (f){
         const txt = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
-        try{ remote = JSON.parse(txt).marks || {}; }catch{}
+        try{ const j = JSON.parse(txt); remote = j.marks || {}; remoteFollows = cleanFollows(j.follows); }catch{}
       }
     }
     // Slå ihop: för varje titel vinner den senaste ändringen.
@@ -2147,10 +2328,15 @@ async function syncNow(){
       if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
     }
     const diff = (a, b) => Object.keys(a).some(k => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
-    const localChanged = diff(merged, marks), remoteChanged = !id || diff(merged, remote);
+    // Följda personer: den senaste ändringen per person vinner (även "slutat följa").
+    const mergedF = { ...follows };
+    for (const [k, f] of Object.entries(remoteFollows)) if (!mergedF[k] || f.t > mergedF[k].t) mergedF[k] = f;
+    const localChanged = diff(merged, marks) || diff(mergedF, follows),
+          remoteChanged = !id || diff(merged, remote) || diff(mergedF, remoteFollows);
     marks = merged; store.set("marks", marks);
+    follows = mergedF; store.set("follows", follows);
     if (remoteChanged){
-      const files = { [GIST_FILE]:{ content:JSON.stringify({ v:1, updated:new Date().toISOString(), marks }) } };
+      const files = { [GIST_FILE]:{ content:JSON.stringify({ v:1, updated:new Date().toISOString(), marks, follows }) } };
       if (!id){
         const g = await gh("/gists", { method:"POST", body:JSON.stringify({ description:"Nytt att se – markeringar (synk)", public:false, files }) });
         store.set("gistId", g.id);
@@ -2158,7 +2344,7 @@ async function syncNow(){
     }
     store.set("syncT", Date.now());
     setSyncStatus("Synkad " + new Date().toLocaleString("sv-SE",{ day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) + ".");
-    if (localChanged){ render(); redrawOverlays(); exportWatch(); }
+    if (localChanged){ render(); redrawOverlays(); renderFollows(); exportWatch(); }
   }catch(e){ setSyncStatus("Synken misslyckades: " + e.message); }
   finally{
     syncBusy = false;
@@ -2283,13 +2469,17 @@ state.len = LENS[store.get("len", "all")] ? store.get("len", "all") : "all";
 let lenOpen = state.len !== "all";
 function drawLenChips(){
   const t = state.type, row = $("lenChips"), btn = $("btnLen");
+  const label = k => k === "fits" ? `${LENS.fits[t]} ${fitsTime()}` : LENS[k][t];
   row.innerHTML = Object.entries(LENS).map(([k, l]) =>
-    `<button data-len="${k}" class="${k === state.len ? "on" : ""}" aria-pressed="${k === state.len}"${l.hint && t === "all" ? ` title="${esc(l.hint)}"` : ""}>${esc(l[t])}</button>`).join("");
+    `<button data-len="${k}" class="${k === state.len ? "on" : ""}" aria-pressed="${k === state.len}"${l.hint && (t === "all" || k === "fits") ? ` title="${esc(l.hint)}"` : ""}>${esc(label(k))}</button>`).join("")
+    + (state.len === "fits" ? `<label class="fitsTime">Klockan <input type="time" id="fitsBy" value="${esc(fitsTime())}" aria-label="Hinns före klockan"></label>` : "");
   row.querySelectorAll("[data-len]").forEach(b => b.onclick = () => setLen(b.dataset.len));
+  const ft = $("fitsBy");
+  if (ft) ft.onchange = () => { if (/^\d\d:\d\d$/.test(ft.value)){ store.set("fitsBy", ft.value); drawLenChips(); applyLen(); $("fitsBy")?.focus(); } };
   row.style.display = lenOpen && state.tab !== "search" ? "" : "none";
   btn.style.display = state.tab === "search" ? "none" : "";
   btn.classList.toggle("on", state.len !== "all");
-  btn.setAttribute("aria-label", state.len === "all" ? "Längd" : "Längd: " + LENS[state.len][t]);
+  btn.setAttribute("aria-label", state.len === "all" ? "Längd" : "Längd: " + label(state.len));
   btn.setAttribute("aria-expanded", String(lenOpen));
 }
 function setLen(k){
@@ -2309,13 +2499,21 @@ const lenQueue = new Set(), lenTried = new Set();
 let lenBusy = 0, lenTimer = 0;
 function applyLen(){
   clearTimeout(lenTimer); lenTimer = 0;
-  const want = state.len;
+  const want = state.len, now = Date.now(), deadline = want === "fits" ? fitsDeadline(now) : 0;
   for (const id of LEN_SCOPES){
     const root = $(id); if (!root) continue;
     let hidden = 0, waiting = 0, unknown = 0;
     root.querySelectorAll(".item").forEach(c => {
       let hide = false;
-      if (want !== "all"){
+      if (want === "fits"){
+        const n = fitsMinutes(c.dataset.kind, c.dataset.tid, c.dataset.len);
+        if (n) hide = now + n*6e4 > deadline;
+        else {
+          hide = true;
+          const tid = c.dataset.tid;
+          if (cfg.tmdbKey && TMDB_ID.test(tid) && !lenTried.has(tid)){ lenQueue.add(tid); waiting++; } else unknown++;
+        }
+      } else if (want !== "all"){
         const n = +(c.dataset.len || 0) || lenCache.get(c.dataset.tid) || 0;
         const b = lenBucket(c.dataset.kind, n);
         if (b) hide = b !== want;
@@ -2339,6 +2537,8 @@ function applyLen(){
     });
     let note = root.nextElementSibling?.classList.contains("lenNote") ? root.nextElementSibling : null;
     const text = !hidden ? "" : waiting ? `Kollar längden på ${waiting} ${waiting === 1 ? "titel" : "titlar"}…`
+      : want === "fits" ? (deadline <= now ? `⏰ Klockan är redan efter ${fitsTime()} – välj en senare tid.`
+        : `⏰ ${hidden} ${hidden === 1 ? "titel" : "titlar"} dolda – de hinns inte före ${fitsTime()}${unknown ? ` (${unknown} med okänd längd)` : ""}.`)
       : `⏱ ${hidden} ${hidden === 1 ? "titel" : "titlar"} dolda av längdfiltret${unknown ? ` (${unknown} med okänd längd)` : ""}.`;
     if (!text){ if (note) note.remove(); continue; }
     if (!note){ note = document.createElement("p"); note.className = "tip lenNote"; note.setAttribute("aria-live", "polite"); root.after(note); }
@@ -2350,6 +2550,8 @@ function applyLen(){
   }
   pumpLen();
 }
+// "Hinns före" räknas om varje minut, eftersom det som hinns blir mindre ju senare det blir.
+setInterval(() => { if (state.len === "fits" && !document.hidden) applyLen(); }, 60e3);
 // Slår upp längden på titlar som saknar den (4 åt gången) och visar korten igen när svaret kommit.
 function pumpLen(){
   while (lenBusy < 4 && lenQueue.size){
@@ -2361,6 +2563,7 @@ function pumpLen(){
 }
 // Hur länge en sparad längd gäller. Okänd längd för en titel som haft premiär de senaste 60 dagarna (eller saknar datum)
 // frågas om efter 2 dygn – nya filmer får ofta sin speltid hos TMDB först efter premiären. Annars 30 dygn.
+const epRuntime = j => Math.round(+(j.last_episode_to_air?.runtime || j.next_episode_to_air?.runtime || (j.episode_run_time || [])[0])) || 0;
 function lenTtl(c){
   if (+c.n) return 30*864e5;
   const d = Date.parse(c.d || "");
@@ -2369,10 +2572,13 @@ function lenTtl(c){
 async function lookupLen(tid){
   try{
     const c = await bigCache.get("len|"+tid);
-    if (c && Date.now() - c.t < lenTtl(c)){ lenCache.set(tid, +c.n || 0); return; }
+    const tv = tid.startsWith("tv/");
+    // Serier sparade innan avsnittslängden fanns med (utan e) slås upp igen.
+    if (c && Date.now() - c.t < lenTtl(c) && (!tv || "e" in c)){ lenCache.set(tid, +c.n || 0); if (tv) epCache.set(tid, +c.e || 0); return; }
     const r = await tmdbGet("/"+tid);
-    const n = Math.round(+(tid.startsWith("tv/") ? r.number_of_seasons : r.runtime)) || 0;
-    lenCache.set(tid, n); bigCache.set("len|"+tid, { t:Date.now(), n, d:r.release_date || r.first_air_date || "" });
+    const n = Math.round(+(tv ? r.number_of_seasons : r.runtime)) || 0, e = tv ? epRuntime(r) : 0;
+    lenCache.set(tid, n); if (tv) epCache.set(tid, e);
+    bigCache.set("len|"+tid, { t:Date.now(), n, ...(tv ? { e } : {}), d:r.release_date || r.first_air_date || "" });
   }catch{ lenCache.set(tid, lenCache.get(tid) || 0); }
 }
 function lenChanged(tid){
@@ -2610,7 +2816,7 @@ function renderHousehold(){
 
 // Bevakning: klockan högst upp
 function updateBell(n){ const b = $("bellBadge"); b.textContent = n; b.style.display = n ? "" : "none"; }
-$("btnBell").onclick = () => { renderAlerts(); $("alertsSheet").classList.add("open"); };
+$("btnBell").onclick = () => { renderAlerts(); renderFollows(); $("alertsSheet").classList.add("open"); };
 $("closeAlerts").onclick = e => { e.preventDefault(); closeTop(); };
 $("clearAlerts").onclick = e => { e.preventDefault(); alerts.forEach(a => a.done = true); store.set("alerts", alerts); renderAlerts(); };
 

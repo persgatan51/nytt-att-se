@@ -1,5 +1,33 @@
 [
   {
+    "date": "2026-11-22",
+    "title": "🎭 Följ skådespelare och regissörer",
+    "changes": [
+      "Tryck ☆ Följ i en skådespelares lista så säger bevakningen till när något nytt med hen finns på dina tjänster. I Android-appen kommer det som notis.",
+      "Vem du följer syns under 🔔 Bevakning, där du också kan sluta följa. Det synkas mellan dina enheter.",
+      "Regissörer och serieskapare i detaljvyn går också att trycka på. Då visas det de har regisserat, skrivit eller skapat."
+    ]
+  },
+  {
+    "date": "2026-11-22",
+    "title": "⏰ Hinns före",
+    "changes": [
+      "Under ⏱ finns nu valet ⏰ Hinns före. Välj en tid, t.ex. 23:00, så visas bara filmer och serieavsnitt som slutar före dess om du startar nu.",
+      "Listan uppdateras varje minut, eftersom det som hinns blir mindre ju senare det blir."
+    ]
+  },
+  {
+    "date": "2026-11-22",
+    "title": "Förbättringar",
+    "changes": [
+      "Skådespelarens lista laddar snabbare: de första titlarna visas direkt och fler när du skrollar ner. Den slutar ladda när du stänger den.",
+      "Titlar som inte har kommit ut än ligger i en egen hopfälld grupp, Kommande, med premiärdatum.",
+      "Med På mina tjänster visas bara titlar som är klara, och en rad visar hur många som är kvar att kolla. Listan hoppar därför inte längre.",
+      "Svensk text och svenskt tal visas per tjänst när dina tjänster skiljer sig åt, t.ex. \"Text: Netflix ✓, Max ✗\".",
+      "\"Slutar ca …\" i detaljvyn räknas om varje minut medan du har den öppen."
+    ]
+  },
+  {
     "date": "2026-11-21",
     "title": "🎭 Se allt en skådespelare varit med i",
     "changes": [
