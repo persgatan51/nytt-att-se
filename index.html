@@ -804,11 +804,13 @@ const LENS = {
 const epCache = new Map();
 // "Hinns före": vald klockslag (HH:MM) och när det infaller. Är klockan redan förbi tiden (men mindre än 12 h)
 // hinns inget; ligger tiden mer än 12 h bakåt menas i morgon, t.ex. 01:00 när klockan är 23:30.
+// Ligger den mer än 12 h framåt menas i går, t.ex. 23:00 när klockan är 00:30 – då är tiden redan passerad.
 const fitsTime = () => /^\d\d:\d\d$/.test(store.get("fitsBy", "")) ? store.get("fitsBy", "") : "23:00";
 function fitsDeadline(now = Date.now()){
   const [h, m] = fitsTime().split(":").map(Number), d = new Date(now); d.setHours(h, m, 0, 0);
   let t = d.getTime();
   if (t < now && now - t > 12*36e5) t += 864e5;
+  else if (t > now && t - now > 12*36e5) t -= 864e5;
   return t;
 }
 const fitsMinutes = (kind, tid, len) => kind === "series" ? epCache.get(tid) || 0 : (+len || lenCache.get(tid) || 0);
@@ -1047,7 +1049,7 @@ function openDetail(id,it){
   $("detailBody").scrollTop = 0;
   $("detail").dataset.cur = s.tmdbId || "";
   showEndTime(s);
-  showPrice(s);
+  showPrice(s, it);
   if (!it.svLang && s.tmdbId) bigCache.get("svl|"+s.tmdbId).then(c => {
     const txt = svLangText(c?.langs);
     if (txt && $("detail").dataset.cur === s.tmdbId && $("svLang")) $("svLang").textContent = txt;
@@ -1330,9 +1332,12 @@ async function seProvidersFor(tmdbId){
 // "Amazon Video" (TMDB) och "Prime Video" (SA) är samma butik, liksom "Apple TV" och "iTunes".
 const shopKey = n => /amazon|prime/i.test(n) ? "amazon" : /apple|itunes/i.test(n) ? "apple" : (n.toLowerCase().split(/\s+/)[0] || n);
 // Lägger ihop TMDB:s lista (om nyckel finns) med SA:s streamingOptions (om titeln kommer därifrån).
-function priceSummary(se, opts){
+// added = tjänsterna appen redan vet att titeln finns på (it.added, från Streaming Availability eller tidigare uppslag).
+// De räknas med, så att raden inte säger emot "Finns på …" när TMDB saknar svensk data (vanligt för helt nya titlar).
+function priceSummary(se, opts, added = []){
   const out = { mine:[], free:[], ads:[], other:[], pay:new Map() };
   const add = (arr, x) => { if (x && !arr.includes(x)) arr.push(x); };
+  for (const k of added) if (cfg.services.includes(k)) add(out.mine, SERVICES.find(x => x.key === k)?.label);
   const myLabel = n => mine().find(svc => svc.match.test(n))?.label;
   const payAdd = (name, kind, price) => {
     const k = shopKey(name), cur = out.pay.get(k) || { name, rent:null, buy:null, has:new Set() };
@@ -1373,15 +1378,16 @@ function priceHtml(p){
   if (!rows.length) rows.push(`<div class="m price">Ingen tjänst i Sverige visar den just nu</div>`);
   return rows.join("");
 }
-async function showPrice(s){
+async function showPrice(s, it){
   const el = $("price"); if (!el || !s) return;
   const still = () => $("detail").classList.contains("open") && $("detail").dataset.cur === (s.tmdbId || "");
   const opts = s.streamingOptions?.[COUNTRY] || [];
+  const added = Object.keys(it?.added || {}).filter(k => cfg.services.includes(k));
   let se = null;
   if (cfg.tmdbKey && s.tmdbId){
-    try { se = await seProvidersFor(s.tmdbId); } catch { if (!opts.length){ if (still()) el.textContent = ""; return; } }
-  } else if (!opts.length){ el.textContent = ""; return; }
-  if (still()) el.innerHTML = priceHtml(priceSummary(se, opts));
+    try { se = await seProvidersFor(s.tmdbId); } catch { if (!opts.length && !added.length){ if (still()) el.textContent = ""; return; } }
+  } else if (!opts.length && !added.length){ el.textContent = ""; return; }
+  if (still()) el.innerHTML = priceHtml(priceSummary(se, opts, added));
 }
 
 // ---------- Personer: allt en skådespelare (eller regissör/serieskapare) medverkat i, nyast först ----------
@@ -2196,6 +2202,13 @@ async function toggleFollow(d){
   saveFollows(); toast(`Följer ${d.name} 🎭 Du får veta när något nytt med hen finns på dina tjänster.`);
   try{ await checkFollow(d.id, f, true); saveFollows(); }catch{}
 }
+// "Ny med …" bara för titlar från det senaste året. Äldre titlar som just kommit till en tjänst får
+// "Nu på Netflix: Titel (2009), med …", så att det inte ser ut som en ny film.
+function followText(name, title, date, svcs, today = dayKey()){
+  const yearAgo = String(+today.slice(0, 4) - 1) + today.slice(4);
+  return date && date < yearAgo ? `Nu på ${svcs}: ${title} (${date.slice(0, 4)}), med ${name}`
+                                : `Ny med ${name}: ${title} finns på ${svcs}`;
+}
 // Kollar de senaste utgivna titlarna med personen. silent = första gången: bara lär sig vad som redan finns.
 async function checkFollow(pid, f, silent){
   const j = await tmdbGet(`/person/${pid}/combined_credits`, { language:"sv-SE" });
@@ -2203,7 +2216,7 @@ async function checkFollow(pid, f, silent){
   const list = [...personCredits(j.cast), ...crewCredits(j.crew)]
     .filter(x => creditDate(x) && creditDate(x) <= today && !seen.has(x.media_type + x.id) && seen.add(x.media_type + x.id))
     .sort((a, b) => creditDate(b).localeCompare(creditDate(a))).slice(0, FOLLOW_RECENT)
-    .map(x => searchItem(x)).filter(it => !f.known.includes(it.show.tmdbId));
+    .map(x => Object.assign(searchItem(x), { credDate:creditDate(x) })).filter(it => !f.known.includes(it.show.tmdbId));
   let fresh = 0;
   for (let i = 0; i < list.length; i += 8) await Promise.all(list.slice(i, i + 8).map(async it => {
     try{
@@ -2213,7 +2226,7 @@ async function checkFollow(pid, f, silent){
       const mk = marks[it.show.tmdbId]?.status;
       if (silent || mk === "seen" || mk === "hidden") return;
       if (addAlert({ id:`person|${pid}|${it.show.tmdbId}`, key:it.show.tmdbId, kind:"person",
-          text:`Ny med ${f.name}: ${it.show.title} finns på ${svcs.map(svcLabel).join(" och ")}`, item:alertItem(it, svcs) })) fresh++;
+          text:followText(f.name, it.show.title, it.credDate, svcs.map(svcLabel).join(" och ")), item:alertItem(it, svcs) })) fresh++;
     }catch{}
   }));
   f.known = [...new Set(f.known)].slice(-200);

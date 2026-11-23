@@ -1,5 +1,15 @@
 [
   {
+    "date": "2026-11-23",
+    "title": "Buggrättningar",
+    "changes": [
+      "⏰ Hinns före fungerar efter midnatt: har klockan redan passerat vald tid (t.ex. 23:00 när den är halv ett) visas inte längre allt som om det hanns.",
+      "💳 Prisraden säger inte längre ”Ingen tjänst i Sverige visar den” för en titel som finns på en av dina tjänster.",
+      "🎭 När en äldre film med någon du följer kommer till dina tjänster står det ”Nu på Netflix: Titel (2009), med …” i stället för ”Ny med …”.",
+      "📱 Android-appens bakgrundskoll av följda personer använder mindre data och batteri."
+    ]
+  },
+  {
     "date": "2026-11-22",
     "title": "💳 Gratis eller betala?",
     "changes": [

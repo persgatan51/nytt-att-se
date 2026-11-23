@@ -77,15 +77,22 @@ object WatchChecker {
 
         // Sparas i finally, så att skickade notiser och nya tjänster/säsonger inte glöms om
         // systemet avbryter jobbet halvvägs (annars kommer samma notis igen nästa gång).
+        // Vad som redan är känt per följd person sparas också separat: webbappen skickar sin egen
+        // "known"-lista vid varje setWatch, och då ska det som upptäckts här inte glömmas.
+        val pknown = try { JSONObject(prefs.getString("pknown", "{}")) } catch (_: Exception) { JSONObject() }
+        val prov = ProvCache(ctx)
         try {
-            checkAll(ctx, cfg, key, services, notified)
+            checkAll(ctx, cfg, key, services, notified, pknown, prov)
         } finally {
             val keep = notified.toList().takeLast(300)
-            prefs.edit().putString("cfg", cfg.toString()).putString("notified", JSONArray(keep).toString()).commit()
+            prefs.edit().putString("cfg", cfg.toString()).putString("notified", JSONArray(keep).toString())
+                .putString("pknown", pknown.toString()).commit()
+            prov.prune()
         }
     }
 
-    private fun checkAll(ctx: Context, cfg: JSONObject, key: String, services: JSONArray, notified: LinkedHashSet<String>) {
+    private fun checkAll(ctx: Context, cfg: JSONObject, key: String, services: JSONArray, notified: LinkedHashSet<String>,
+                         pknown: JSONObject, prov: ProvCache) {
         val want = cfg.optJSONArray("want") ?: JSONArray()
         for (i in 0 until want.length()) {
             if (Thread.currentThread().isInterrupted) return
@@ -129,32 +136,40 @@ object WatchChecker {
             val p = people.getJSONObject(i)
             val pid = p.optLong("id")
             if (pid <= 0) continue
-            val known = p.optJSONArray("known").strings().toMutableSet()
+            val known = (p.optJSONArray("known").strings() + pknown.optJSONArray(pid.toString()).strings()).toMutableSet()
             val res = tmdb(key, "/person/$pid/combined_credits?language=sv-SE") ?: continue
             try {
                 for (c in PersonCredits.recent(res, today).filter { it.id !in known }) {
                     if (Thread.currentThread().isInterrupted) return
-                    val avail = servicesFor(key, c.id, services) ?: continue
+                    // Titlar som inte finns på dina tjänster kollas om vid varje körning – med cache
+                    // (ett dygn) blir det högst ett TMDB-anrop per titel och dygn.
+                    val avail = servicesFor(key, c.id, services, prov) ?: continue
                     if (avail.isEmpty()) continue
                     known += c.id
                     val nid = "person|$pid|${c.id}"
                     if (notified.add(nid)) notify(ctx, nid.hashCode(),
-                        "Ny med ${p.optString("name")}: ${c.title} finns på ${avail.joinToString(" och ") { it.second }}",
+                        PersonCredits.text(p.optString("name"), c, avail.joinToString(" och ") { it.second }, today),
                         "Från en person du följer. Tryck för att öppna Nytt att se.")
                 }
             } finally {
-                p.put("known", JSONArray(known.toList().takeLast(200)))
+                val list = JSONArray(known.toList().takeLast(200))
+                p.put("known", list)
+                pknown.put(pid.toString(), list)
             }
         }
     }
 
     /** Vilka av dina tjänster titeln finns på (nyckel, namn) – null om TMDB inte svarade. */
-    private fun servicesFor(key: String, id: String, services: JSONArray): List<Pair<String, String>>? {
-        val res = tmdb(key, "/$id/watch/providers") ?: return null
-        val se = res.optJSONObject("results")?.optJSONObject("SE") ?: JSONObject()
-        val names = mutableListOf<String>()
-        for (t in listOf("flatrate", "free", "ads")) se.optJSONArray(t)?.let { a ->
-            for (j in 0 until a.length()) names += a.getJSONObject(j).optString("provider_name").trim()
+    private fun servicesFor(key: String, id: String, services: JSONArray, cache: ProvCache? = null): List<Pair<String, String>>? {
+        val names = cache?.get(id) ?: run {
+            val res = tmdb(key, "/$id/watch/providers") ?: return null
+            val se = res.optJSONObject("results")?.optJSONObject("SE") ?: JSONObject()
+            val n = mutableListOf<String>()
+            for (t in listOf("flatrate", "free", "ads")) se.optJSONArray(t)?.let { a ->
+                for (j in 0 until a.length()) n += a.getJSONObject(j).optString("provider_name").trim()
+            }
+            cache?.put(id, n)
+            n
         }
         val out = mutableListOf<Pair<String, String>>()
         for (j in 0 until services.length()) {
@@ -231,5 +246,42 @@ object PersonCredits {
         add(res.optJSONArray("cast")) { !selfRole.containsMatchIn(it.optString("character").trim()) }
         add(res.optJSONArray("crew")) { it.optString("job") in crewJobs }
         return byId.values.sortedByDescending { it.date }.take(max)
+    }
+
+    /**
+     * Notisens rubrik (samma text som i webbappen): "Ny med …" bara för titlar från det senaste året.
+     * Äldre titlar som just kommit till en tjänst får "Nu på Netflix: Titel (2009), med …".
+     */
+    fun text(name: String, c: Credit, svcs: String, today: String): String {
+        val yearAgo = (today.take(4).toIntOrNull()?.minus(1)?.toString() ?: "") + today.drop(4)
+        return if (c.date < yearAgo) "Nu på $svcs: ${c.title} (${c.date.take(4)}), med $name"
+               else "Ny med $name: ${c.title} finns på $svcs"
+    }
+}
+
+/** TMDB:s svenska tjänster per titel, sparade ett dygn (för personkollen, som annars frågar om samma titlar varje gång). */
+class ProvCache(ctx: Context) {
+    private val prefs = ctx.getSharedPreferences("prov", Context.MODE_PRIVATE)
+    private val ttl = TimeUnit.DAYS.toMillis(1)
+
+    fun get(id: String): List<String>? = try {
+        val o = JSONObject(prefs.getString(id, null) ?: return null)
+        if (System.currentTimeMillis() - o.optLong("t") > ttl) null
+        else o.optJSONArray("n")?.let { a -> (0 until a.length()).map { a.getString(it) } }
+    } catch (_: Exception) { null }
+
+    fun put(id: String, names: List<String>) {
+        prefs.edit().putString(id, JSONObject().put("t", System.currentTimeMillis()).put("n", JSONArray(names)).toString()).apply()
+    }
+
+    /** Tar bort gamla poster, så att filen inte växer. */
+    fun prune() {
+        val now = System.currentTimeMillis()
+        val e = prefs.edit()
+        for ((k, v) in prefs.all) {
+            val t = try { JSONObject(v as? String ?: "").optLong("t") } catch (_: Exception) { 0L }
+            if (now - t > ttl) e.remove(k)
+        }
+        e.apply()
     }
 }

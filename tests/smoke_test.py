@@ -64,6 +64,8 @@ def tmdb(route):
     elif path == "/movie/741/watch/providers":   # bara hyra/köpa: kostar extra
         body={"results":{"SE":{"rent":[{"provider_name":"Amazon Video"},{"provider_name":"SF Anytime"}],"buy":[{"provider_name":"Amazon Video"}],
                                "flatrate":[{"provider_name":"C More"}]}}}
+    elif path == "/movie/745/watch/providers":   # TMDB saknar svensk data (vanligt för helt nya titlar)
+        body={"results":{}}
     elif path == "/movie/743/watch/providers":   # gratis med reklam
         body={"results":{"SE":{"ads":[{"provider_name":"Pluto TV"}],"free":[{"provider_name":"SVT Play"}]}}}
     elif path.endswith("/watch/providers"):
@@ -535,7 +537,7 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     n0 = pg.evaluate("alerts.length")
     pg.evaluate("follows[55].known = follows[55].known.filter(k => k !== 'movie/732')")
     fresh = pg.evaluate("checkFollow(55, follows[55], false)")
-    check(fresh == 1 and pg.evaluate("alerts[0].text") == "Ny med Anna Skådis: Film 732 finns på Netflix" and pg.evaluate("alerts.length") == n0 + 1,
+    check(fresh == 1 and pg.evaluate("alerts[0].text") == "Nu på Netflix: Film 732 (2019), med Anna Skådis" and pg.evaluate("alerts.length") == n0 + 1,
           "ny titel med en följd person ger en notis")
     check(pg.evaluate("checkFollow(55, follows[55], false)") == 0, "samma titel ger ingen ny notis")
     pg.evaluate("closeSheets(); $('btnBell').click()"); pg.wait_for_timeout(200)
@@ -594,6 +596,11 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pr = pg.locator("#price").inner_text()
     check("Gratis på SVT Play" in pr and "Gratis med reklam på Pluto TV" in pr and "Kostar extra" not in pr, "pris: gratis visas – " + pr)
     pg.evaluate("closeSheets()")
+    pg.evaluate("openDetail('x', { show:{ showType:'movie', tmdbId:'movie/745', title:'Helt ny', imageSet:{} }, added:{ netflix:0 }, links:{}, approx:{}, search:true })")
+    pg.wait_for_timeout(400)
+    pr = pg.locator("#price").inner_text()
+    check("Ingår i ditt abonnemang på Netflix" in pr and "Ingen tjänst" not in pr, "pris: säger inte emot Finns på när TMDB saknar data – " + pr)
+    pg.evaluate("closeSheets()")
     pg.evaluate("closeSheets()")
 
     # Hinns före: tiden räknas till i dag, eller i morgon om den ligger långt bakåt.
@@ -603,6 +610,12 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
         store.set('fitsBy', '01:00'); const t1 = new Date(d(23)); t1.setDate(t1.getDate() + 1); t1.setHours(1, 0, 0, 0);
         const ok2 = fitsDeadline(d(23)) === t1.getTime();
         return ok1 && ok2; }"""), "Hinns före räknar ut rätt klockslag")
+    # Efter midnatt: 23:00 när klockan är 00:30 har redan passerat (inte 22,5 h fram).
+    check(pg.evaluate("""() => { store.set('fitsBy', '23:00'); const n = new Date(); n.setHours(0, 30, 0, 0);
+        return fitsDeadline(n.getTime()) < n.getTime(); }"""), "Hinns före: 23:00 är redan passerat klockan 00:30")
+    ft = pg.evaluate("""() => [followText('Anna', 'Gammal', '2009-05-01', 'Netflix', '2026-11-23'),
+                             followText('Anna', 'Färsk', '2026-06-01', 'Netflix', '2026-11-23')]""")
+    check(ft[0] == "Nu på Netflix: Gammal (2009), med Anna" and ft[1] == "Ny med Anna: Färsk finns på Netflix", f"följd person: äldre titlar kallas inte nya ({ft})")
     pg.evaluate("showTab('new')"); pg.wait_for_timeout(300)
     pg.evaluate("""() => { const t = new Date(Date.now() + 100*6e4); store.set('fitsBy', String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0')); }""")
     pg.click("#btnLen"); pg.wait_for_timeout(100); pg.click("#lenChips [data-len='fits']")
