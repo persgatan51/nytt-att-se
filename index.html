@@ -3186,8 +3186,122 @@ $("btnQuiz").onclick = openQuiz;
 updateQuizDot();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") updateQuizDot(); });
 
+// ---------- 📤 Dela till Nytt att se (Android: Dela → Nytt att se) ----------
+// Android-appen tar emot delad text och länkar (t.ex. ett tips i ett meddelande) och lämnar över dem via
+// TvBridge.takeShared(). IMDb- och TMDB-länkar slås upp direkt. Annars tolkas texten (eller länkens adress)
+// som en titel och söks i TMDB: en säker träff öppnas direkt, annars visas sökträffarna så att man väljer själv.
+// Texten kommer utifrån och visas bara som sökord (textContent) – aldrig som HTML.
+const SHARE_SITES = "YouTube|Netflix|IMDb|HBO Max|Max|Viaplay|Prime Video|Amazon|Disney\\+|Apple TV\\+?|SVT Play|TV4 Play|SkyShowtime|JustWatch|Letterboxd|TMDB";
+function cleanShareTitle(s){
+  let t = String(s || "").replace(/https?:\/\/\S+/gi, " ").replace(/\s+/g, " ").trim();
+  const year = +(t.match(/\((19|20)\d\d\)/)?.[0].slice(1, 5) || 0) || null;
+  t = t.replace(new RegExp(`\\s*[-|–—:]\\s*(${SHARE_SITES})\\b.*$`, "i"), "")                 // "… - YouTube"
+       .replace(new RegExp(`\\s+(on|på|i)\\s+(${SHARE_SITES})\\b.*$`, "i"), "")                // "… på Netflix"
+       .replace(/^(watch|titta på|kolla in|kolla|check out|se|tips:?)\s+/i, "")
+       .replace(/\((19|20)\d\d\)/g, " ")
+       .replace(/\b(season|säsong|series)\s*\d+\b|\bS\d{1,2}(E\d{1,2})?\b/gi, " ")
+       .replace(/\b(4K|UHD|HD)\b/g, " ")
+       .replace(/#\S+/g, " ");
+  // "Titel | Official Trailer" / "Titel Officiell trailer" – allt från trailer-ordet och framåt tas bort,
+  // utom när titeln står efter det ("Official Trailer: Titel").
+  const cut = t.replace(/\s*[-|–—:]?\s*\b(official|officiell|svensk|swedish|final|new|ny)?\s*(trailer|trailern|teaser)\b.*$/i, "");
+  t = cut.trim().length >= 2 ? cut : t.replace(/\b(official|officiell|svensk|swedish|final|new|ny)?\s*(trailer|trailern|teaser)\b\s*[:|-]?/gi, " ");
+  t = t.replace(/\s*[|]\s*.*$/, "").replace(/[\s"“”'‘’«»„:–—|!?.,;-]+$/g, "").replace(/^[\s"“”'‘’«»„:–—|-]+/g, "").replace(/\s+/g, " ").trim();
+  return { q: t.slice(0, 80), year };
+}
+// Sökord från en adress utan titel i texten, t.ex. justwatch.com/se/film/slow-horses eller letterboxd.com/film/dune-2021/.
+function slugQuery(url){
+  let u; try{ u = new URL(url); }catch{ return null; }
+  if (/youtube\.com|youtu\.be|imdb\.com|themoviedb\.org/i.test(u.hostname)) return null;
+  const segs = u.pathname.split("/").map(s => { try{ return decodeURIComponent(s); }catch{ return s; } })
+    .filter(s => /^[\p{L}\d]+(-[\p{L}\d]+)+$/u.test(s) && !/^[\da-f]{8}-[\da-f]{4}-/i.test(s) && /\p{L}{2}/u.test(s));
+  if (!segs.length) return null;
+  let s = segs[segs.length - 1], year = null;
+  const y = s.match(/-((?:19|20)\d\d)$/); if (y){ year = +y[1]; s = s.slice(0, -5); }
+  s = s.replace(/(-\d+)+$/, "");
+  return s.length >= 2 ? { q: s.replace(/-/g, " ").slice(0, 80), year } : null;
+}
+function parseShared(raw){
+  const text = String(raw?.text || "").slice(0, 2000), subject = String(raw?.subject || "").slice(0, 300);
+  const all = subject + "\n" + text;
+  const urls = all.match(/https?:\/\/[^\s<>"'”]+/gi) || [];
+  const tm = all.match(/themoviedb\.org\/(movie|tv)\/(\d+)/i);
+  const imdb = all.match(/imdb\.com\/(?:[a-z-]+\/)?title\/(tt\d{5,10})/i)?.[1] || all.match(/^\s*(tt\d{5,10})\s*$/)?.[1] || null;
+  let found = null;
+  // Citerad titel först (Watch “X” on Netflix, Kolla in "X" på Max), sedan rubriken, texten och sist adressen.
+  for (const s of [subject, text]){
+    const m = s.replace(/https?:\/\/\S+/gi, " ").match(/[“"«„]([^“”"«»„]{2,80})[”"»“]/);
+    if (m){ found = cleanShareTitle(m[1]); const y = cleanShareTitle(s).year; if (y) found.year = y; break; }
+  }
+  for (const s of [subject, text]) if (!found?.q){ const c = cleanShareTitle(s); if (c.q.length >= 2) found = c; }
+  for (const u of urls) if (!found?.q){ found = slugQuery(u); }
+  return { tmdbId: tm ? `${tm[1].toLowerCase()}/${tm[2]}` : null, imdb, query: found?.q || "", year: found?.year || null,
+           yt: urls.find(u => /youtube\.com\/(watch|shorts)|youtu\.be\//i.test(u)) || null };
+}
+// En säker träff: titeln (eller originaltiteln) stämmer exakt och, om ett år finns, året. Flera lika träffar
+// räknas bara som säkra om den första är mycket populärare än nästa.
+function sharePick(results, q, year){
+  const norm = s => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/&/g, "and").replace(/[^\p{L}\d]+/gu, "");
+  const nq = norm(q); if (!nq) return null;
+  const yr = x => +(x.release_date || x.first_air_date || "").slice(0, 4) || 0;
+  let hits = results.filter(x => [x.title, x.name, x.original_title, x.original_name].some(t => t && norm(t) === nq));
+  if (year){ const y = hits.filter(x => Math.abs(yr(x) - year) <= 1); if (y.length) hits = y; }
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1 && (hits[0].popularity || 0) >= 3 * (hits[1].popularity || 0) && (hits[0].popularity || 0) > 0) return hits[0];
+  return null;
+}
+async function ytTitle(url){
+  try{
+    const r = await fetch("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(url));
+    return r.ok ? cleanShareTitle((await r.json()).title) : null;
+  }catch{ return null; }
+}
+async function openSharedItem(it){
+  await fillServices([it]);
+  openDetail("tmdb:" + it.show.tmdbId, it);
+}
+let shareBusy = false;
+async function handleShared(raw){
+  if (!cfg.tmdbKey){ toast("📤 Lägg in en TMDB-nyckel under ⚙︎ för att kunna öppna det du delar."); return; }
+  if (shareBusy) return; shareBusy = true;
+  const p = parseShared(raw);
+  try{
+    toast("📤 Letar upp det du delade…");
+    if (p.tmdbId){
+      const x = await tmdbGet("/" + p.tmdbId, { language:"sv-SE" });
+      return await openSharedItem(searchItem({ ...x, id:+p.tmdbId.split("/")[1] }, p.tmdbId.split("/")[0]));
+    }
+    if (p.imdb){
+      const r = await tmdbGet(`/find/${p.imdb}`, { external_source:"imdb_id", language:"sv-SE" });
+      const m = r.movie_results?.[0], t = r.tv_results?.[0], ep = r.tv_episode_results?.[0];
+      if (m) return await openSharedItem(searchItem(m, "movie"));
+      if (t) return await openSharedItem(searchItem(t, "tv"));
+      if (ep?.show_id){ const s = await tmdbGet(`/tv/${ep.show_id}`, { language:"sv-SE" }); return await openSharedItem(searchItem({ ...s, id:ep.show_id }, "tv")); }
+    }
+    let q = p.query, year = p.year;
+    if (!q && p.yt){ const y = await ytTitle(p.yt); if (y){ q = y.q; year = y.year; } }
+    if (!q){ toast("📤 Hittade ingen film eller serie i det du delade. Sök gärna själv."); showTab("search"); return; }
+    const r = await tmdbGet("/search/multi", { query:q, language:"sv-SE", include_adult:"false", region:"SE" });
+    const pick = sharePick((r.results || []).filter(x => x.media_type === "movie" || x.media_type === "tv"), q, year);
+    if (pick) return await openSharedItem(searchItem(pick));
+    // Osäkert vilken titel som menas: visa sökträffarna så att man väljer själv.
+    showTab("search"); $("q").value = q; runSearch(q);
+    toast(`📤 Välj rätt titel bland träffarna för ”${q}”`);
+  }catch(e){ toast("📤 Kunde inte öppna det du delade: " + e.message); }
+  finally{ shareBusy = false; }
+}
+// Hämtar det som delats till Android-appen (finns bara i nyare versioner av appen).
+function takeShared(){
+  if (!TV || typeof TV.takeShared !== "function") return;
+  let raw = null; try{ raw = JSON.parse(TV.takeShared() || "null"); }catch{}
+  if (raw && (raw.text || raw.subject)) handleShared(raw);
+}
+window.__onShare = takeShared;
+
 bigCache.get(expKey());
 load();
+// Öppnades appen via Dela → Nytt att se? (Kommer det något medan appen är öppen anropas window.__onShare.)
+setTimeout(takeShared, 400);
 setTimeout(async () => { if (cfg.ghToken) await syncNow(); runWatch(); askWatched(); }, 1200);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;

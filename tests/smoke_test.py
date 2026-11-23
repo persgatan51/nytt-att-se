@@ -51,6 +51,13 @@ def tmdb(route):
             credit(736, "movie", fut, "Kommande roll")],   # premiär om två månader: i Kommande
             "crew":[dict(credit(737, "movie", "2020-02-02", ""), job="Director"), dict(credit(737, "movie", "2020-02-02", ""), job="Screenplay"),
                     dict(credit(738, "movie", "2018-01-01", ""), job="Sound")]}}
+    elif path == "/find/tt5875444":   # Dela: IMDb-länk
+        body={"movie_results":[dict(mk(777), title="Delad film")],"tv_results":[]}
+    elif path == "/search/multi" and "query=Slow+Horses" in u.replace("%20", "+"):   # Dela: en säker träff
+        body={"results":[dict(mk(901), media_type="tv", name="Slow Horses", first_air_date="2022-04-01"),
+                         dict(mk(902), media_type="movie", title="Slow Horses: Bakom kulisserna")]}
+    elif path == "/search/multi" and "query=Fallout" in u:   # Dela: två lika träffar – man får välja själv
+        body={"results":[dict(mk(903), media_type="tv", name="Fallout"), dict(mk(904), media_type="movie", title="Fallout")]}
     elif path.startswith("/search/"): body={"results":[dict(mk(i), media_type="movie") for i in range(300,306)]}
     elif path.startswith("/genre/"): body={"genres":[{"id":28,"name":"action"},{"id":35,"name":"komedi"}]}
     elif path.startswith("/discover/") and ("first_air_date.gte" in u or "primary_release_date.gte" in u):
@@ -644,6 +651,34 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     tv.click("#detailBody a.tv.trailer"); tv.wait_for_timeout(300)
     check(tv.evaluate("window.__launched") == "https://www.youtube.com/watch?v=trl715"
           and tv.evaluate("JSON.parse(localStorage.lastPlayed).id") == "movie/710", "Trailer på TV startar YouTube och räknas inte som att titeln startats")
+
+    # 📤 Dela till Nytt att se: tolkning av det som delas.
+    ps = tv.evaluate("""() => [
+        parseShared({ text:"Watch “Slow Horses” on Netflix https://www.netflix.com/title/81219087" }).query,
+        parseShared({ text:"https://m.imdb.com/title/tt0816692/" }).imdb,
+        parseShared({ text:"https://www.themoviedb.org/tv/1399-game-of-thrones" }).tmdbId,
+        JSON.stringify(parseShared({ text:"https://youtu.be/x", subject:"SLOW HORSES Season 4 Official Trailer (2024) | Apple TV+" })),
+        JSON.stringify(parseShared({ text:"https://letterboxd.com/film/dune-2021/" }))]""")
+    check(ps[0] == "Slow Horses" and ps[1] == "tt0816692" and ps[2] == "tv/1399"
+          and '"query":"SLOW HORSES","year":2024' in ps[3] and '"query":"dune","year":2021' in ps[4], f"dela: titel, IMDb, TMDB, trailer och adress tolkas ({ps})")
+    # Delat medan appen är öppen: IMDb-länken öppnar detaljvyn direkt, med dina tjänster.
+    tv.evaluate("""() => { closeSheets(); window.__share = JSON.stringify({ text:"Kolla! https://www.imdb.com/title/tt5875444/", subject:"" });
+        TvBridge.takeShared = () => { const s = window.__share || ""; window.__share = ""; return s; }; window.__onShare(); }""")
+    tv.wait_for_timeout(1200)
+    check(tv.locator("#detail").evaluate("e => e.classList.contains('open')") and tv.evaluate("$('detail').dataset.cur") == "movie/777"
+          and "Delad film" in tv.locator("#detailBody").inner_text(), "dela: IMDb-länk öppnar detaljvyn")
+    check(tv.evaluate("TvBridge.takeShared()") == "", "dela: samma delning lämnas bara ut en gång")
+    tv.evaluate("closeSheets(); handleShared({ text:'Watch “Slow Horses” on Netflix https://www.netflix.com/title/1' })"); tv.wait_for_timeout(1200)
+    check(tv.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "tv/901", "dela: en säker titelträff öppnas direkt")
+    tv.evaluate("closeSheets(); handleShared({ text:'Kolla in Fallout!' })"); tv.wait_for_timeout(1500)
+    check(not tv.evaluate("$('detail').classList.contains('open')") and tv.evaluate("$('q').value") == "Fallout"
+          and tv.locator("#searchResults .item").count() >= 2, "dela: osäker träff visar sökträffarna att välja bland")
+    # Öppnas appen via Dela hämtas delningen när sidan laddats.
+    sh = ctx.new_page(); sh.on("pageerror", lambda e: errs.append("JS: "+str(e)))
+    sh.add_init_script("""window.TvBridge = { getTv:() => "{}", setWatch:() => {}, checkWatchNow:() => {}, notifEnabled:() => true,
+        takeShared:() => { const s = sessionStorage.taken ? "" : JSON.stringify({ text:"https://www.imdb.com/title/tt5875444/" }); sessionStorage.taken = 1; return s; } };""")
+    sh.goto(INDEX); sh.wait_for_timeout(2500)
+    check(sh.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "movie/777", "dela: delning vid start öppnar titeln")
     b.close()
 
 print("JS-fel:" , [e for e in errs if e.startswith("JS")])

@@ -1,6 +1,16 @@
 [
   {
     "date": "2026-11-23",
+    "title": "📤 Dela till Nytt att se",
+    "changes": [
+      "Fått ett tips i ett meddelande eller hittat en trailer? Tryck Dela → Nytt att se i Android, så öppnas titeln direkt i appen. Där ser du om den finns på dina tjänster och kan trycka 📺 Spela på TV eller ⭐ Vill se.",
+      "IMDb- och TMDB-länkar hittar alltid rätt titel. Från Netflix, YouTube, JustWatch, Letterboxd och vanlig text letar appen upp titeln utifrån namnet.",
+      "Är det oklart vilken titel som menas visas sökträffarna, så att du väljer själv.",
+      "Kräver den nya versionen av Android-appen."
+    ]
+  },
+  {
+    "date": "2026-11-23",
     "title": "Buggrättningar",
     "changes": [
       "⏰ Hinns före fungerar efter midnatt: har klockan redan passerat vald tid (t.ex. 23:00 när den är halv ett) visas inte längre allt som om det hanns.",

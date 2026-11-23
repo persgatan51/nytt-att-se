@@ -45,11 +45,26 @@ class MainActivity : Activity() {
     // Bevakningen har en egen tråd, så att en lång koll inte blockerar TV-kommandona.
     private val watchWorker = Executors.newSingleThreadExecutor()
     private val prefs by lazy { getSharedPreferences("tv", MODE_PRIVATE) }
+    // Det som senast delats till appen (Dela → Nytt att se), som JSON { text, subject }. Webbappen hämtar
+    // det med TvBridge.takeShared() när sidan laddats, eller direkt via window.__onShare om den redan är öppen.
+    @Volatile private var shared: String? = null
+
+    private fun readShare(intent: Intent?) {
+        val i = intent ?: return
+        if (i.action != Intent.ACTION_SEND || i.type?.startsWith("text/") != true) return
+        // Öppnas appen igen från "senaste appar" levereras samma delning en gång till – den är redan visad.
+        if ((i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+        val text = i.getStringExtra(Intent.EXTRA_TEXT)?.take(2000) ?: ""
+        val subject = i.getStringExtra(Intent.EXTRA_SUBJECT)?.take(300) ?: ""
+        if (text.isBlank() && subject.isBlank()) return
+        shared = JSONObject().put("text", text).put("subject", subject).toString()
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tv = TvRemote(this)
+        if (savedInstanceState == null) readShare(intent)
         web = WebView(this)
         setContentView(web)
         web.settings.javaScriptEnabled = true
@@ -84,6 +99,13 @@ class MainActivity : Activity() {
         } else web.loadUrl(START_URL + "?v=" + System.currentTimeMillis())
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readShare(intent)
+        if (shared != null && trusted) web.evaluateJavascript("window.__onShare && window.__onShare()", null)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         web.saveState(outState)
@@ -116,6 +138,14 @@ class MainActivity : Activity() {
 
     inner class Bridge {
         @JavascriptInterface fun version(): String = "1"
+
+        /** Det som delats till appen (JSON { text, subject }), eller "" – lämnas bara ut en gång. */
+        @JavascriptInterface fun takeShared(): String {
+            if (!trusted) return ""
+            val s = shared ?: return ""
+            shared = null
+            return s
+        }
         @JavascriptInterface fun getTv(): String = if (!trusted) "{}" else JSONObject()
             .put("host", prefs.getString("host", "") ?: "")
             .put("name", prefs.getString("name", "") ?: "")
