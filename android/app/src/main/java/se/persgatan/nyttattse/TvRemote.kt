@@ -155,7 +155,8 @@ class TvRemote(private val ctx: Context) {
     private fun connect(host: String, port: Int): SSLSocket {
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
         kmf.init(keyStore(), pw)
-        // TV:n har ett självsignerat certifikat; vi litar på den TV som användaren valt.
+        // TV:n har ett självsignerat certifikat. Själva TLS-kontrollen godkänner det, och i stället sparas
+        // TV:ns nyckel första gången appen ansluter efter parkopplingen (se checkPin) och krävs sedan varje gång.
         val trustAll = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -173,6 +174,32 @@ class TvRemote(private val ctx: Context) {
         s.soTimeout = 10_000
         s.startHandshake()
         return s
+    }
+
+    // ---------------- TV:ns certifikat (trust on first use) ----------------
+    private val tvPrefs by lazy { ctx.getSharedPreferences("tv", Context.MODE_PRIVATE) }
+
+    private fun fingerprint(s: SSLSocket): String {
+        val cert = s.session.peerCertificates.firstOrNull() as? X509Certificate
+            ?: throw TvException("TV:n visade inget certifikat.")
+        return MessageDigest.getInstance("SHA-256").digest(cert.publicKey.encoded).joinToString("") { "%02x".format(it) }
+    }
+
+    /** Första anslutningen efter parkopplingen sparar TV:ns nyckel; därefter måste den vara densamma. */
+    private fun checkPin(host: String, s: SSLSocket) {
+        val fp = fingerprint(s)
+        val saved = tvPrefs.getString("pin|$host", null)
+        if (saved == null) tvPrefs.edit().putString("pin|$host", fp).apply()
+        else if (saved != fp) {
+            s.close()
+            throw TvException("TV:n känns inte igen (den har ett nytt certifikat). Parkoppla igen under ⚙︎.")
+        }
+    }
+
+    private fun clearPins() {
+        val e = tvPrefs.edit()
+        for (k in tvPrefs.all.keys) if (k.startsWith("pin|")) e.remove(k)
+        e.apply()
     }
 
     // ---------------- Parkoppling (port 6467) ----------------
@@ -226,6 +253,7 @@ class TvRemote(private val ctx: Context) {
             send(s.outputStream, outer().msg(40, Pb().bytes(1, hash)).toBytes())
             val m = readOuter(s.inputStream)
             if (!m.containsKey(41)) throw TvException("TV:n godkände inte parkopplingen.")
+            clearPins()   // ny parkoppling: TV:ns nyckel sparas på nytt vid nästa anslutning
         } finally {
             s.close(); pairSocket = null
         }
@@ -240,6 +268,7 @@ class TvRemote(private val ctx: Context) {
         val s = try { connect(host, 6466) } catch (e: javax.net.ssl.SSLException) {
             throw TvException("TV:n godkänner inte appen. Parkoppla igen under ⚙︎.")
         }
+        checkPin(host, s)
         s.use {
             val o = s.outputStream; val i = s.inputStream
             var active = features

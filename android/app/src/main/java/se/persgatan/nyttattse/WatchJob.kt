@@ -107,7 +107,7 @@ object WatchChecker {
                 val nid = "avail|$id|" + added.joinToString(",")
                 if (notified.add(nid)) notify(ctx, nid.hashCode(),
                     "${w.optString("title")} finns nu på ${newLabels.joinToString(" och ")}",
-                    "Från din Vill se-lista. Tryck för att öppna Nytt att se.")
+                    "Från din Vill se-lista. Tryck för att öppna titeln.", id)
             }
             w.put("svcs", JSONArray(now))
         }
@@ -123,7 +123,7 @@ object WatchChecker {
             if (aired > known) {
                 val nid = "season|$id|$aired"
                 if (notified.add(nid)) notify(ctx, nid.hashCode(),
-                    "${s.optString("title")}: säsong $aired har kommit", "Tryck för att öppna Nytt att se.")
+                    "${s.optString("title")}: säsong $aired har kommit", "Tryck för att öppna serien.", id)
                 s.put("seasons", aired)
             }
         }
@@ -149,7 +149,7 @@ object WatchChecker {
                     val nid = "person|$pid|${c.id}"
                     if (notified.add(nid)) notify(ctx, nid.hashCode(),
                         PersonCredits.text(p.optString("name"), c, avail.joinToString(" och ") { it.second }, today),
-                        "Från en person du följer. Tryck för att öppna Nytt att se.")
+                        "Från en person du följer. Tryck för att öppna titeln.", c.id)
                 }
             } finally {
                 val list = JSONArray(known.toList().takeLast(200))
@@ -157,6 +157,9 @@ object WatchChecker {
                 pknown.put(pid.toString(), list)
             }
         }
+        // Personer du slutat följa tas bort, så att listan inte växer i onödan.
+        val following = (0 until people.length()).map { people.getJSONObject(it).optLong("id").toString() }.toSet()
+        for (k in pknown.keys().asSequence().toList()) if (k !in following) pknown.remove(k)
     }
 
     /** Vilka av dina tjänster titeln finns på (nyckel, namn) – null om TMDB inte svarade. */
@@ -198,12 +201,16 @@ object WatchChecker {
         } catch (_: Exception) { null } finally { c.disconnect() }
     }
 
-    private fun notify(ctx: Context, id: Int, title: String, text: String) {
+    /** open = titelns TMDB-id (t.ex. "tv/1399"); ett tryck på notisen öppnar titeln i appen. */
+    private fun notify(ctx: Context, id: Int, title: String, text: String, open: String) {
         val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Bevakning", NotificationManager.IMPORTANCE_DEFAULT))
         if (Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val pi = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java),
+        // Egen requestCode per notis, annars delar alla notiser samma intent (och öppnar samma titel).
+        val intent = Intent(ctx, MainActivity::class.java).setAction(MainActivity.ACTION_OPEN)
+            .putExtra(MainActivity.EXTRA_OPEN, open)
+        val pi = PendingIntent.getActivity(ctx, id, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = Notification.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_notify)

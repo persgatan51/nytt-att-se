@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f1115">
+<!-- Säkerhet: sidan får bara skicka data till de tjänster appen använder, så att nycklar och GitHub-token
+     inte kan skickas någon annanstans även om ett skript skulle ta sig in. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://api.themoviedb.org https://streaming-availability.p.rapidapi.com https://api.movieofthenight.com https://www.omdbapi.com https://api.github.com https://gist.githubusercontent.com https://www.youtube.com; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'self'">
 <title>Nytt att se</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -101,7 +104,8 @@
   #lenChips{flex-wrap:wrap;align-items:center}
   .fitsTime{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
   .fitsTime input{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:4px 6px;font:inherit}
-  .actions a#followBtn{display:inline-block;padding:6px 14px;font-weight:500}
+  .actions #followBtn{display:inline-block;padding:6px 14px;font-weight:500;font:inherit;font-weight:500;text-align:center;border-radius:12px;color:#fff;background:var(--card);border:1px solid var(--line);cursor:pointer}
+  .actions #followBtn.on{background:var(--acc);color:#111;border-color:var(--acc)}
   .linkbtn{background:none;border:0;color:var(--acc);text-decoration:underline;font:inherit;padding:6px}
   #personUp{margin:10px 0;border:1px solid var(--line);border-radius:12px;padding:8px 10px}
   #personUp summary{cursor:pointer;font-weight:600}
@@ -335,8 +339,9 @@
   <input id="tmdbKey" autocomplete="off" spellcheck="false" placeholder="v3-nyckel eller Read Access Token">
   <label for="omdbKey">OMDb-nyckel (valfri – visar betyg från IMDb, Rotten Tomatoes och Metacritic)</label>
   <input id="omdbKey" autocomplete="off" spellcheck="false" placeholder="Gratis på omdbapi.com/apikey.aspx">
-  <label for="ghToken">GitHub-token för synk mellan enheter (valfri – behörighet: gist)</label>
+  <label for="ghToken">GitHub-token för synk mellan enheter (valfri)</label>
   <input id="ghToken" autocomplete="off" spellcheck="false" placeholder="github_pat_… eller ghp_…">
+  <p class="tip">Tips: skapa en <i>fine-grained</i> token (github.com → Settings → Developer settings → Fine-grained tokens) med bara behörigheten <b>Gists: Read and write</b>. Den kan inte röra något annat på ditt konto.</p>
   <p class="tip" id="syncStatus">Vill se, Sett och Ta bort sparas i en privat gist på ditt GitHub-konto, så att alla enheter med samma token ser samma listor.</p>
   <div class="actions" style="margin-top:6px">
     <a href="#" id="syncNowBtn">🔄 Synka nu</a>
@@ -1334,6 +1339,15 @@ const shopKey = n => /amazon|prime/i.test(n) ? "amazon" : /apple|itunes/i.test(n
 // Lägger ihop TMDB:s lista (om nyckel finns) med SA:s streamingOptions (om titeln kommer därifrån).
 // added = tjänsterna appen redan vet att titeln finns på (it.added, från Streaming Availability eller tidigare uppslag).
 // De räknas med, så att raden inte säger emot "Finns på …" när TMDB saknar svensk data (vanligt för helt nya titlar).
+// Pris i kronor ("49 kr"), eller i den valuta tjänsten anger.
+function fmtPrice(p){
+  if (!p || typeof p !== "object") return null;
+  const n = +p.amount, cur = /^[A-Z]{3}$/.test(p.currency || "") ? p.currency : null;
+  if (n > 0 && cur){
+    try{ return new Intl.NumberFormat("sv-SE", { style:"currency", currency:cur, maximumFractionDigits: n % 1 ? 2 : 0 }).format(n); }catch{}
+  }
+  return p.formatted ? String(p.formatted) : (n > 0 ? `${n} ${cur || ""}`.trim() : null);
+}
 function priceSummary(se, opts, added = []){
   const out = { mine:[], free:[], ads:[], other:[], pay:new Map() };
   const add = (arr, x) => { if (x && !arr.includes(x)) arr.push(x); };
@@ -1350,7 +1364,7 @@ function priceSummary(se, opts, added = []){
   for (const n of se?.buy || []) payAdd(n, "buy");
   for (const o of opts || []){
     const id = o.service?.id, name = SERVICES.find(x => x.key === id)?.label || o.service?.name || id; if (!name) continue;
-    const price = o.price?.formatted || (o.price?.amount ? `${o.price.amount} ${o.price.currency || ""}`.trim() : null);
+    const price = fmtPrice(o.price);
     if (o.type === "subscription") cfg.services.includes(id) ? add(out.mine, name) : add(out.other, name);
     else if (o.type === "free") add(out.free, name);
     else if (o.type === "ads") add(out.ads, name);
@@ -1478,7 +1492,7 @@ async function openPerson(pid, name, as = "cast"){
       <div class="phead">${d.photo ? `<img alt="" src="${esc(d.photo)}">` : ""}<div>
         <h2>${esc(d.name)}</h2>
         <div class="m">${nMovie} ${nMovie === 1 ? "film" : "filmer"} · ${nTv} ${nTv === 1 ? "serie" : "serier"}${d.born ? ` · född ${esc(d.born.slice(0,4))}` : ""}</div>
-        <div class="actions" style="margin-top:6px"><a href="#" id="followBtn" class="${fol ? "on" : ""}" aria-pressed="${fol}">${fol ? "★ Följer" : "☆ Följ"}</a></div></div></div>
+        <div class="actions" style="margin-top:6px"><button type="button" id="followBtn" class="${fol ? "on" : ""}" aria-pressed="${fol}">${fol ? "★ Följer" : "☆ Följ"}</button></div></div></div>
       ${d.cast.length && d.crew.length ? `<div class="wrapchips" id="personRole">${chip("data-pas", "cast", as === "cast", `Skådespelare (${d.cast.length})`)}${chip("data-pas", "crew", as === "crew", `Regi och manus (${d.crew.length})`)}</div>` : ""}
       <div class="wrapchips" id="personFilter">${chip("data-pmine", "0", !onlyMine, "Alla")}${chip("data-pmine", "1", onlyMine, "På mina tjänster")}</div>
       ${up.length ? `<details id="personUp"${upOpen ? " open" : ""}><summary>📅 Kommande (${up.length})</summary><div class="hrow" id="personUpcoming" style="margin-top:8px"></div></details>` : ""}
@@ -1531,13 +1545,14 @@ function searchItem(x, type){
 }
 
 let searchSeq = 0, redrawSearch = null;
-async function runSearch(q){
+// pre = färdiga träffar från /search/multi (t.ex. från en delning), så att samma sökning inte görs två gånger.
+async function runSearch(q, pre){
   const seq = ++searchSeq, st = $("searchStatus"), out = $("searchResults");
   if (q.length < 2){ out.innerHTML = ""; st.textContent = ""; return; }
   if (!cfg.tmdbKey){ st.textContent = "Sökningen kräver en TMDB-nyckel under ⚙︎."; return; }
   st.textContent = "Söker…"; st.style.display = "";
   try{
-    const r = await tmdbGet("/search/multi", { query:q, language:"sv-SE", include_adult:"false", region:"SE" });
+    const r = Array.isArray(pre) ? { results:pre } : await tmdbGet("/search/multi", { query:q, language:"sv-SE", include_adult:"false", region:"SE" });
     if (seq !== searchSeq) return;
     const res = r.results || [];
     const titles = res.filter(x=>x.media_type==="movie"||x.media_type==="tv").slice(0,12).map(x=>searchItem(x));
@@ -2341,14 +2356,24 @@ async function recsFor(id){
 // ---------- Betyg från IMDb, Rotten Tomatoes och Metacritic (OMDb) ----------
 async function ratingsFor(imdb){
   const cache = store.get("omdb", {});
-  if (cache[imdb] && Date.now() - cache[imdb].t < 7*864e5) return cache[imdb];
+  const c = cache[imdb];
+  // Lyckade svar sparas en vecka. Fel (t.ex. "Movie not found!" för helt nya titlar, eller att dagens
+  // gratisanrop är slut) sparas ett dygn, så att varje öppning av detaljvyn inte kostar ett nytt anrop.
+  if (c && Date.now() - c.t < (c.err ? 1 : 7)*864e5){ if (c.err) throw new Error(c.err); return c; }
+  const save = res => {
+    const keys = Object.keys(cache); if (keys.length > 400) delete cache[keys[0]];
+    cache[imdb] = res; store.set("omdb", cache);
+  };
   const r = await fetch(`https://www.omdbapi.com/?i=${encodeURIComponent(imdb)}&apikey=${encodeURIComponent(cfg.omdbKey)}`);
-  const j = await r.json();
-  if (j.Response === "False") throw new Error(j.Error || "OMDb");
+  let j = null; try{ j = await r.json(); }catch{}
+  if (!r.ok || !j || j.Response === "False"){
+    const err = String(j?.Error || "OMDb svarade " + r.status).slice(0, 120);
+    if (r.status !== 401 && !/invalid api key/i.test(err)) save({ t:Date.now(), err });   // fel nyckel sparas inte – den rättas under ⚙︎
+    throw new Error(err);
+  }
   const na = v => v && v !== "N/A" ? v : null;
   const res = { t:Date.now(), imdb:na(j.imdbRating), rt:na((j.Ratings || []).find(x => x.Source === "Rotten Tomatoes")?.Value), mc:na(j.Metascore) };
-  const keys = Object.keys(cache); if (keys.length > 400) delete cache[keys[0]];
-  cache[imdb] = res; store.set("omdb", cache);
+  save(res);
   return res;
 }
 async function renderRatings(s, imdb){
@@ -3260,13 +3285,16 @@ async function openSharedItem(it){
   await fillServices([it]);
   openDetail("tmdb:" + it.show.tmdbId, it);
 }
-let shareBusy = false;
+let shareBusy = false, shareNext = null;
 async function handleShared(raw){
-  if (!cfg.tmdbKey){ toast("📤 Lägg in en TMDB-nyckel under ⚙︎ för att kunna öppna det du delar."); return; }
-  if (shareBusy) return; shareBusy = true;
+  const notif = raw?.src === "notif";   // tryck på en bevakningsnotis i Android-appen
+  if (!cfg.tmdbKey){ toast(notif ? "Lägg in en TMDB-nyckel under ⚙︎ för att kunna öppna titeln." : "📤 Lägg in en TMDB-nyckel under ⚙︎ för att kunna öppna det du delar."); return; }
+  // Kommer en ny delning medan den förra letas upp sparas den och visas efteråt (den senaste vinner).
+  if (shareBusy){ shareNext = raw; return; }
+  shareBusy = true;
   const p = parseShared(raw);
   try{
-    toast("📤 Letar upp det du delade…");
+    toast(notif ? "🔔 Öppnar titeln…" : "📤 Letar upp det du delade…");
     if (p.tmdbId){
       const x = await tmdbGet("/" + p.tmdbId, { language:"sv-SE" });
       return await openSharedItem(searchItem({ ...x, id:+p.tmdbId.split("/")[1] }, p.tmdbId.split("/")[0]));
@@ -3284,11 +3312,14 @@ async function handleShared(raw){
     const r = await tmdbGet("/search/multi", { query:q, language:"sv-SE", include_adult:"false", region:"SE" });
     const pick = sharePick((r.results || []).filter(x => x.media_type === "movie" || x.media_type === "tv"), q, year);
     if (pick) return await openSharedItem(searchItem(pick));
-    // Osäkert vilken titel som menas: visa sökträffarna så att man väljer själv.
-    showTab("search"); $("q").value = q; runSearch(q);
+    // Osäkert vilken titel som menas: visa sökträffarna (utan att söka igen) så att man väljer själv.
+    showTab("search"); $("q").value = q; runSearch(q, r.results || []);
     toast(`📤 Välj rätt titel bland träffarna för ”${q}”`);
-  }catch(e){ toast("📤 Kunde inte öppna det du delade: " + e.message); }
-  finally{ shareBusy = false; }
+  }catch(e){ toast((notif ? "Kunde inte öppna titeln: " : "📤 Kunde inte öppna det du delade: ") + e.message); }
+  finally{
+    shareBusy = false;
+    if (shareNext){ const n = shareNext; shareNext = null; handleShared(n); }
+  }
 }
 // Hämtar det som delats till Android-appen (finns bara i nyare versioner av appen).
 function takeShared(){

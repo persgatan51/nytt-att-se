@@ -10,11 +10,17 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import java.util.concurrent.Executors
 
 /**
@@ -27,6 +33,11 @@ class MainActivity : Activity() {
         const val START_URL = "https://persgatan51.github.io/nytt-att-se/"
         const val HOST = "persgatan51.github.io"
         const val PATH = "/nytt-att-se"
+        // Notiser från bevakningen öppnar appen med titelns TMDB-id (t.ex. "tv/1399").
+        const val ACTION_OPEN = "se.persgatan.nyttattse.OPEN"
+        const val EXTRA_OPEN = "open"
+        private val TMDB_ID = Regex("^(movie|tv)/\\d{1,10}$")
+        private val YT_LINK = Regex("https?://(www\\.|m\\.)?(youtube\\.com/(watch|shorts)|youtu\\.be/)\\S+", RegexOption.IGNORE_CASE)
 
         // Bara appens egen sida (inte andra Pages-projekt på samma konto) får använda TvBridge.
         fun isOurPage(uri: Uri?): Boolean {
@@ -51,28 +62,78 @@ class MainActivity : Activity() {
 
     private fun readShare(intent: Intent?) {
         val i = intent ?: return
-        if (i.action != Intent.ACTION_SEND || i.type?.startsWith("text/") != true) return
         // Öppnas appen igen från "senaste appar" levereras samma delning en gång till – den är redan visad.
         if ((i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+        // Tryck på en bevakningsnotis: öppna titeln i detaljvyn (samma väg som en delad TMDB-länk).
+        if (i.action == ACTION_OPEN) {
+            val id = i.getStringExtra(EXTRA_OPEN) ?: return
+            if (!TMDB_ID.matches(id)) return
+            shared = JSONObject().put("text", "https://www.themoviedb.org/$id").put("subject", "").put("src", "notif").toString()
+            return
+        }
+        if (i.action != Intent.ACTION_SEND || i.type?.startsWith("text/") != true) return
         val text = i.getStringExtra(Intent.EXTRA_TEXT)?.take(2000) ?: ""
         val subject = i.getStringExtra(Intent.EXTRA_SUBJECT)?.take(300) ?: ""
         if (text.isBlank() && subject.isBlank()) return
+        // YouTube-appen delar ofta bara en länk. Titeln hämtas här (oEmbed), eftersom webbsidan kan stoppas av
+        // CORS-regler. Misslyckas det lämnas länken över ändå, och webbappen försöker själv.
+        val yt = YT_LINK.find(text)?.value
+        if (yt != null && subject.isBlank() && text.replace(yt, "").isBlank()) {
+            worker.execute {
+                val title = ytTitle(yt)
+                shared = JSONObject().put("text", text).put("subject", title ?: "").toString()
+                runOnUiThread { if (trusted && ::web.isInitialized) web.evaluateJavascript("window.__onShare && window.__onShare()", null) }
+            }
+            return
+        }
         shared = JSONObject().put("text", text).put("subject", subject).toString()
     }
 
+    private fun ytTitle(url: String): String? {
+        val c = URL("https://www.youtube.com/oembed?format=json&url=" + URLEncoder.encode(url, "UTF-8")).openConnection() as HttpURLConnection
+        return try {
+            c.connectTimeout = 6000
+            c.readTimeout = 6000
+            if (c.responseCode != 200) null
+            else JSONObject(c.inputStream.bufferedReader().readText().take(20000)).optString("title").take(300).ifBlank { null }
+        } catch (_: Exception) { null } finally { c.disconnect() }
+    }
+
+    // Utan nät: först sidan från cachen, annars en egen sida med "Försök igen".
+    // 0 = vanlig laddning, 1 = cachen provas, 2 = sidan utan nät visas.
+    private var fallback = 0
+    private var cacheLoading = false
+
+    private fun loadStart() {
+        fallback = 0
+        web.settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // no-cache: sidan hämtas alltid färsk vid start (GitHub Pages cachar annars i upp till 10 min),
+        // men sparas ändå i cachen så att den kan visas när nätet saknas.
+        web.loadUrl(START_URL, mapOf("Cache-Control" to "no-cache"))
+    }
+
+    private fun offlineHtml() = """<!doctype html><html lang="sv"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Ingen anslutning</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1115;color:#e8eaf0;
+font-family:system-ui,sans-serif;text-align:center;padding:24px;box-sizing:border-box}h1{font-size:1.3rem}p{color:#9aa3b2}
+a{display:inline-block;margin-top:16px;padding:12px 22px;border-radius:999px;background:#e50914;color:#fff;text-decoration:none;font-weight:600}</style>
+</head><body><main><div style="font-size:3rem">📡</div><h1>Ingen anslutning</h1>
+<p>Nytt att se behöver internet första gången. Kontrollera wifi eller mobildata.</p>
+<a href="$START_URL">Försök igen</a></main></body></html>"""
+
     @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        tv = TvRemote(this)
-        if (savedInstanceState == null) readShare(intent)
-        web = WebView(this)
-        setContentView(web)
-        web.settings.javaScriptEnabled = true
-        web.settings.domStorageEnabled = true
-        web.webViewClient = object : WebViewClient() {
+    private fun createWebView(): WebView {
+        val w = WebView(this)
+        w.settings.javaScriptEnabled = true
+        w.settings.domStorageEnabled = true
+        w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
-                if (isOurPage(uri)) return false
+                if (isOurPage(uri)) {
+                    // "Försök igen" på sidan utan nät: ladda om som vid start.
+                    if (fallback == 2) { loadStart(); return true }
+                    return false
+                }
                 // Allt annat (Netflix, YouTube, TMDB, andra sidor på github.io …) öppnas i rätt app på telefonen.
                 try { startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) {}
                 return true
@@ -80,23 +141,64 @@ class MainActivity : Activity() {
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 trusted = isOurPage(url?.let { Uri.parse(it) })
+                if (fallback == 1) cacheLoading = true
                 super.onPageStarted(view, url, favicon)
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                // Sidan från cachen är laddad: API-anropen ska gå mot nätet som vanligt.
+                if (cacheLoading) { cacheLoading = false; view.settings.cacheMode = WebSettings.LOAD_DEFAULT }
+                super.onPageFinished(view, url)
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 trusted = isOurPage(url?.let { Uri.parse(it) })
                 super.doUpdateVisitedHistory(view, url, isReload)
             }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (!request.isForMainFrame || !isOurPage(request.url)) return
+                if (fallback == 0) {
+                    fallback = 1
+                    view.settings.cacheMode = WebSettings.LOAD_CACHE_ONLY
+                    view.post { view.loadUrl(START_URL) }
+                } else {
+                    fallback = 2
+                    cacheLoading = false
+                    view.settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    trusted = false
+                    view.post { view.loadDataWithBaseURL(null, offlineHtml(), "text/html", "utf-8", null) }
+                }
+            }
+
+            // Systemet kan stänga WebViews renderare (t.ex. vid ont om minne). Utan detta dödas hela appen.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                if (view !== web) return true
+                trusted = false
+                try { view.destroy() } catch (_: Exception) {}
+                web = createWebView()
+                setContentView(web)
+                loadStart()
+                return true
+            }
         }
-        web.addJavascriptInterface(Bridge(), "TvBridge")
+        w.addJavascriptInterface(Bridge(), "TvBridge")
         // Låt webbsidan sköta långa tryck (snabbmenyn) – inte WebViews egen textmarkering.
-        web.setOnLongClickListener { true }
-        web.isHapticFeedbackEnabled = false
-        // ?v= gör att sidan alltid hämtas färsk vid start (GitHub Pages cachar annars i upp till 10 min).
-        if (savedInstanceState != null) {
-            web.restoreState(savedInstanceState)
+        w.setOnLongClickListener { true }
+        w.isHapticFeedbackEnabled = false
+        return w
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        tv = TvRemote(this)
+        if (savedInstanceState == null) readShare(intent)
+        web = createWebView()
+        setContentView(web)
+        if (savedInstanceState != null && web.restoreState(savedInstanceState) != null) {
             trusted = isOurPage(web.url?.let { Uri.parse(it) })
-        } else web.loadUrl(START_URL + "?v=" + System.currentTimeMillis())
+        } else loadStart()
     }
 
     override fun onNewIntent(intent: Intent) {

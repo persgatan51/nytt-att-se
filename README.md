@@ -25,7 +25,7 @@ Appen har fyra flikar längst ner: **Nytt**, **Upptäck** (topplistor, kommande,
 | Streaming Availability (RapidAPI, gratisnivå) | Datum när titlar lades upp, direktlänkar, tjänsternas egna topp 10, Försvinner snart |
 | TMDB | Svenska beskrivningar, sök, tips, liknande, För dig, bevakning, Viaplay |
 | OMDb (valfri) | Betyg från IMDb, Rotten Tomatoes och Metacritic |
-| GitHub-token med behörigheten `gist` (valfri) | Synk mellan enheter |
+| GitHub-token (valfri) – helst en *fine-grained* token med bara **Gists: Read and write** | Synk mellan enheter |
 
 ## Test
 `python3 tests/smoke_test.py` kör appen i Chrome mot påhittad data (inga riktiga API-anrop).
