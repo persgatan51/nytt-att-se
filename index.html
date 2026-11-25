@@ -3033,8 +3033,10 @@ async function quizPool(){
   const recent = new Date(); recent.setFullYear(recent.getFullYear() - 2);
   const page = n => 1 + Math.floor(Math.random() * n);
   const jobs = [];
-  for (const type of ["movie", "tv"]){
-    const ids = await myProviderIds(type);
+  // Tjänsternas id för film och serie hämtas samtidigt (inte efter varandra).
+  const provIds = await Promise.all(["movie", "tv"].map(t => myProviderIds(t)));
+  for (const [ti, type] of ["movie", "tv"].entries()){
+    const ids = provIds[ti];
     if (!ids.length) continue;
     const df = type === "movie" ? "primary_release_date" : "first_air_date";
     const base = { watch_region:"SE", language:"sv-SE", with_watch_providers:ids.join("|"), with_watch_monetization_types:"flatrate",
@@ -3054,10 +3056,11 @@ async function quizPool(){
   return out;
 }
 
-async function buildQuiz(){
+// exclude = titlar som inte ska vara med (t.ex. rundan som spelas just nu, när nästa förbereds).
+async function buildQuiz(exclude = []){
   const pool = await quizPool();
   const titleOf = x => x.title || x.name;
-  const used = new Set(store.get("quizUsed", []));
+  const used = new Set([...store.get("quizUsed", []), ...exclude]);
   const fresh = shuffle(pool.filter(p => !used.has(p.id)));
   const picks = []; let series = 0;
   for (const p of (fresh.length >= QUIZ_N ? fresh : shuffle(pool))){
@@ -3094,15 +3097,41 @@ async function buildQuiz(){
   }));
 }
 
+// Nästa runda förbereds i bakgrunden (sparas i quizNext), så att quizet öppnas direkt i stället för att
+// vänta på ett tiotal TMDB-anrop. Gäller i tre dygn och bara för samma tjänster.
+const quizSig = () => [...cfg.services].sort().join(",");
+let quizPrep = null;
+const prepOk = nx => nx && Array.isArray(nx.items) && nx.items.length >= 3 && nx.sig === quizSig() && Date.now() - nx.t < 3*864e5;
+function preloadPosters(items){ for (const it of items || []) if (it?.poster){ const im = new Image(); im.decoding = "async"; im.src = it.poster; } }
+function prepQuiz(){
+  if (!cfg.tmdbKey || quizPrep || prepOk(store.get("quizNext", null))) return quizPrep;
+  quizPrep = buildQuiz((quiz?.items || []).map(i => i.id))
+    .then(items => { if (items.length >= 3) store.set("quizNext", { t:Date.now(), sig:quizSig(), items }); })
+    .catch(() => {})
+    .finally(() => { quizPrep = null; });
+  return quizPrep;
+}
+function takePrepped(){
+  const nx = store.get("quizNext", null);
+  store.set("quizNext", null);
+  return prepOk(nx) ? nx.items : null;
+}
+
 async function newQuiz(extra){
   if (quizBusy) return;
   quizBusy = true;
-  $("quizBody").innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Plockar fram ${extra ? "en extrarunda" : "dagens titlar"}…</p>`;
   try{
-    const items = await buildQuiz();
+    let items = takePrepped();
+    if (!items){
+      $("quizBody").innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Plockar fram ${extra ? "en extrarunda" : "dagens titlar"}…</p>`;
+      if (quizPrep){ await quizPrep; items = takePrepped(); }   // en förberedelse pågår redan – vänta på den
+      if (!items) items = await buildQuiz();
+    }
     if (items.length < 3) throw new Error("Hittade för få titlar på dina tjänster.");
     quiz = { day:dayKey(), extra, items, idx:0, clues:0, answers:[] };
     store.set("quiz", quiz);
+    preloadPosters(items);                 // alla affischer i rundan laddas direkt, inte en i taget
+    setTimeout(prepQuiz, 1500);            // och nästa runda (t.ex. en extrarunda) förbereds
   }catch(e){
     $("quizBody").innerHTML = `<h2>🎬 Filmquiz</h2><p class="msg">Kunde inte skapa en runda: ${esc(e.message)}</p>
       <div class="actions"><a href="#" class="primary" data-q="retry">Försök igen</a><a href="#" data-q="close">Stäng</a></div>`;
@@ -3115,6 +3144,7 @@ async function newQuiz(extra){
 async function openQuiz(){
   $("quiz").classList.add("open");
   if (cfg.tmdbKey && (!quiz || quiz.day !== dayKey())) return newQuiz(false);
+  if (quiz && !quizDone(quiz)) preloadPosters(quiz.items.slice(quiz.idx));
   renderQuiz();
 }
 
@@ -3209,6 +3239,8 @@ function bindQuiz(extra){
 }
 $("btnQuiz").onclick = openQuiz;
 updateQuizDot();
+// Har man spelat quizet förut förbereds nästa runda en stund efter start, så att den öppnas direkt.
+setTimeout(() => { if (quizStats.days > 0 || quiz) prepQuiz(); }, 8000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") updateQuizDot(); });
 
 // ---------- 📤 Dela till Nytt att se (Android: Dela → Nytt att se) ----------

@@ -438,6 +438,11 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     pg.click("#btnQuiz"); pg.wait_for_timeout(800)
     n = pg.evaluate("quiz.items.length")
     check(n == 5 and pg.locator("#quizBody .qopts button").count() == 4, f"quizet har {n} frågor med 4 svar")
+    # Nästa runda förbereds i bakgrunden, utan titlarna i rundan som spelas nu.
+    pg.wait_for_timeout(2000)
+    pg.wait_for_function("(JSON.parse(localStorage.quizNext || 'null')?.items || []).length >= 3", timeout=8000)
+    check(pg.evaluate("(() => { const nx = JSON.parse(localStorage.quizNext); const cur = new Set(quiz.items.map(i => i.id)); return nx.items.every(i => !cur.has(i.id)); })()"),
+          "nästa quizrunda förbereds i bakgrunden, med andra titlar")
     st = pg.locator("#quizBody .qposter img").get_attribute("style")
     check("scale(2.4)" in st and "blur(4.5px)" in st, f"affischen börjar inzoomad och lite suddig ({st})")
     check(pg.evaluate("quiz.items.every(i => i.focus[1] >= 30 && i.focus[1] <= 50 && i.focus[0] >= 35 && i.focus[0] <= 65)"),
@@ -464,7 +469,11 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     check("Harry" not in pg.evaluate("maskTitle('Harry Potter möter Voldemort', 'Harry Potter och de vises sten')"), "titeln döljs i handlingen")
     m = pg.evaluate("maskTitle('Familjen flyttar till ett hus, men ljuset i huset lockar fram Us.', 'Us')")
     check("hus," in m and "ljuset" in m and "huset" in m and "Us." not in m, f"bara hela ord döljs ({m})")
-    pg.click("#quizBody [data-q='extra']"); pg.wait_for_timeout(800)
+    d0 = sum(1 for c in calls if c.startswith("/discover/"))
+    pg.click("#quizBody [data-q='extra']"); pg.wait_for_timeout(100)
+    check(pg.evaluate("quiz.extra && quiz.items.length >= 3") and pg.locator("#quizBody .qopts button").count() == 4
+          and sum(1 for c in calls if c.startswith("/discover/")) == d0, "extrarundan öppnas direkt med den förberedda rundan")
+    pg.wait_for_timeout(700)
     pg.evaluate("() => { while (!quizDone(quiz)){ document.querySelector('#quizBody [data-opt]').click(); document.querySelector('#quizBody [data-q=next]').click(); } }")
     check(pg.evaluate("quiz.extra && quizStats.days === 1") and "räknas inte" in pg.locator("#quizBody").inner_text(), "extrarundan räknas inte i statistiken")
     pg.evaluate("quizStats.last = prevDay(dayKey()); quizStats.streak = 4; quiz.day = prevDay(dayKey()); closeTop(); openQuiz()"); pg.wait_for_timeout(800)

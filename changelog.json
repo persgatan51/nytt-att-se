@@ -1,6 +1,15 @@
 [
   {
     "date": "2026-11-25",
+    "title": "🎬 Snabbare filmquiz",
+    "changes": [
+      "Nästa quizrunda förbereds i bakgrunden, så att dagens quiz och extrarundor öppnas direkt i stället för efter flera sekunders väntan.",
+      "Alla affischer i rundan laddas på en gång, så att nästa fråga visas utan att bilden behöver laddas.",
+      "Första gången du spelar går det också lite snabbare."
+    ]
+  },
+  {
+    "date": "2026-11-25",
     "title": "🔔 Notiser öppnar titeln och appen klarar sig utan nät",
     "changes": [
       "Trycker du på en bevakningsnotis öppnas titeln direkt, med ⭐ Vill se och 📺 Spela på TV. Tidigare öppnades bara startsidan.",
