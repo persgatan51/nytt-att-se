@@ -1,5 +1,17 @@
 [
   {
+    "date": "2026-11-27",
+    "title": "🛡️ Säkrare synk och stabilare app",
+    "changes": [
+      "Synken skriver aldrig över det andra enheter har sparat om synkfilen inte går att läsa. Då står det ”Kunde inte läsa synkfilen – inget skrevs över” och synken provar igen senare.",
+      "Begränsar GitHub anropen visas det i stället för ”Token saknar behörighet”, och synken fortsätter fungera efteråt.",
+      "Hänger nätet står det inte längre ”Söker…” för evigt: efter 12 sekunder står det ”Ingen kontakt med …”, och man kan försöka igen.",
+      "Är tjänsterna tillfälligt överbelastade provar appen en gång till automatiskt. Det står bara ”Dagens gratisanrop är slut” när kvoten faktiskt är slut.",
+      "Säger webbläsaren att lagringen är full får du veta det, så att en ⭐ inte försvinner i tysthet. Appen sparar också mindre i webbläsaren än förut.",
+      "Nya hemskärmsikoner som ser rätt ut på alla Android-telefoner och på iPhone."
+    ]
+  },
+  {
     "date": "2026-11-25",
     "title": "🎬 Snabbare filmquiz",
     "changes": [
