@@ -1,5 +1,17 @@
 [
   {
+    "date": "2026-11-28",
+    "title": "🔧 Stabilare app och TV-anslutning",
+    "changes": [
+      "Byter du tjänster under ⚙︎ syns det direkt i sökningen, i skådespelarvyn och i quizet – du behöver inte starta om appen.",
+      "Slutar svaret komma mitt i på ett segt mobilnät står det ”Ingen kontakt med …” i stället för att appen väntar för evigt.",
+      "Android: efter ett kort nätavbrott vid start fungerar appen som vanligt så fort nätet är tillbaka, i stället för att visa tomma listor.",
+      "Android: delar du en YouTube-länk behöver den inte vänta på att TV:n svarar först.",
+      "Android: om appen får problem flera gånger i rad visas en sida med ”Försök igen” i stället för att den startar om gång på gång.",
+      "Android: TV:n känns igen även om den får en ny adress i hemnätet, och ingen annan enhet kan låtsas vara din TV."
+    ]
+  },
+  {
     "date": "2026-11-27",
     "title": "🛡️ Säkrare synk och stabilare app",
     "changes": [

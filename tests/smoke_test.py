@@ -6,6 +6,14 @@ import http.server, threading, functools
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 class _Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
+    def do_GET(self):
+        if self.path.startswith("/haenger"):   # svarshuvuden direkt, men innehållet slutar komma mitt i
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", "100")
+            self.end_headers(); self.wfile.write(b'{"a":'); self.wfile.flush()
+            try: time.sleep(3)
+            except Exception: pass
+            return
+        return super().do_GET()
 _srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(ROOT)))
 threading.Thread(target=_srv.serve_forever, daemon=True).start()
 INDEX = f"http://127.0.0.1:{_srv.server_address[1]}/index.html"
@@ -784,6 +792,15 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
         handleShared({ text:'https://www.themoviedb.org/tv/901' }); }""")
     tv.wait_for_timeout(2000)
     check(tv.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "tv/901", "dela: en delning under pågående uppslag köas")
+    # Nätanrop: svarar tjänsten men innehållet slutar komma mitt i, avbryts även läsningen med ett begripligt fel.
+    body = pg.evaluate("""async () => { NET_TIMEOUT = 400; try{ const r = await net('/haenger', {}, 'TMDB'); await r.json(); return 'svar'; }
+        catch(e){ return e.message; } finally{ NET_TIMEOUT = 12000; } }""")
+    check(body == "Ingen kontakt med TMDB – försök igen.", f"nätanrop: tidsgränsen gäller även när svaret läses ({body})")
+    # Ändras Mina tjänster under ⚙︎ märks det direkt i tjänsteuppslagen (sökning, skådespelarvy, quiz).
+    sv_ch = pg.evaluate("""async () => { const old = cfg.services; const a = await myServicesFor('movie/555002');
+        cfg.services = old.filter(k => k !== 'netflix'); const b = await myServicesFor('movie/555002'); cfg.services = old; return [a, b]; }""")
+    check(sv_ch[0] == ["netflix"] and sv_ch[1] == [], f"tjänsteuppslag följer ändrade Mina tjänster ({sv_ch})")
+    check(pg.evaluate("bigCache.set('test|x', 1)") is True, "IndexedDB: sparande säger om det lyckades")
     # Tryck på en bevakningsnotis i Android-appen öppnar titeln.
     tv.evaluate("closeSheets(); handleShared({ text:'https://www.themoviedb.org/movie/777', subject:'', src:'notif' })"); tv.wait_for_timeout(1200)
     check(tv.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "movie/777", "notis: tryck öppnar titeln i detaljvyn")
@@ -793,7 +810,25 @@ with sync_playwright() if False else __import__("playwright.sync_api", fromlist=
         takeShared:() => { const s = sessionStorage.taken ? "" : JSON.stringify({ text:"https://www.imdb.com/title/tt5875444/" }); sessionStorage.taken = 1; return s; } };""")
     sh.goto(INDEX); sh.wait_for_timeout(2500)
     check(sh.evaluate("$('detail').classList.contains('open') && $('detail').dataset.cur") == "movie/777", "dela: delning vid start öppnar titeln")
+    # Utan IndexedDB (t.ex. avstängt i webbläsaren) ligger den gamla meta-kopian kvar i localStorage
+    # i stället för att raderas utan att ha flyttats.
+    noidb = ctx.new_page(); noidb.on("pageerror", lambda e: errs.append("JS (utan IndexedDB): "+str(e)))
+    noidb.add_init_script("""Object.defineProperty(window, 'indexedDB', { get(){ return { open(){ throw new Error('avstängt'); } }; } });
+        if (!sessionStorage.metaSet){ sessionStorage.metaSet = 1; localStorage.setItem('meta', JSON.stringify({ 'movie/1': { lang:'en', countries:['US'], sv:null } })); }""")
+    noidb.goto(INDEX); noidb.wait_for_timeout(1500)
+    kept = noidb.evaluate("[!!localStorage.getItem('meta'), meta['movie/1']?.lang || null]")
+    check(kept == [True, "en"], f"meta: gamla kopian raderas inte om IndexedDB saknas ({kept})")
+    noidb.evaluate("localStorage.removeItem('meta')"); noidb.close()
     b.close()
+
+# Android: tydligt avgränsade rättningar som inte kan köras här kontrolleras i källkoden (bygget görs av GitHub Actions).
+KT = ROOT / "android/app/src/main/java/se/persgatan/nyttattse"
+main_kt, tv_kt = (KT / "MainActivity.kt").read_text(), (KT / "TvRemote.kt").read_text()
+check("LOAD_CACHE_ONLY" not in main_kt and "LOAD_CACHE_ELSE_NETWORK" in main_kt and "fallback = 0" in main_kt.split("onPageFinished", 1)[1].split("doUpdateVisitedHistory", 1)[0],
+      "Android: cachereserven stoppar inte nätanrop och nollställs när sidan laddats")
+check(re.search(r"shareWorker\.execute \{\s*val title = ytTitle", main_kt) is not None, "Android: YouTube-uppslaget har en egen tråd")
+check("restarts.size >= 2" in main_kt.split("onRenderProcessGone", 1)[1], "Android: högst två omstarter av renderaren per minut")
+check('getString("pin", null)' in tv_kt and 'putString("pin|$host"' not in tv_kt, "Android: TV:ns nyckel knyts inte till IP-adressen")
 
 # Hemskärmsikoner: PNG i 192 och 512 px, en maskable och en apple-touch-icon.
 man = json.loads((ROOT / "manifest.json").read_text())

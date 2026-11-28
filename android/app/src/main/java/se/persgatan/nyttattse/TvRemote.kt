@@ -185,11 +185,19 @@ class TvRemote(private val ctx: Context) {
         return MessageDigest.getInstance("SHA-256").digest(cert.publicKey.encoded).joinToString("") { "%02x".format(it) }
     }
 
-    /** Första anslutningen efter parkopplingen sparar TV:ns nyckel; därefter måste den vara densamma. */
+    /**
+     * Första anslutningen efter parkopplingen sparar TV:ns nyckel; därefter måste den vara densamma.
+     * Nyckeln sparas oberoende av IP-adressen, så att en TV som fått ny adress (DHCP) inte ger en ny
+     * "första anslutning" där vad som helst på den nya adressen skulle godkännas.
+     */
     private fun checkPin(host: String, s: SSLSocket) {
         val fp = fingerprint(s)
-        val saved = tvPrefs.getString("pin|$host", null)
-        if (saved == null) tvPrefs.edit().putString("pin|$host", fp).apply()
+        // Tidigare versioner sparade nyckeln per adress ("pin|<ip>") – den används om den finns.
+        val saved = tvPrefs.getString("pin", null)
+            ?: (tvPrefs.getString("pin|$host", null)
+                ?: tvPrefs.all.entries.firstOrNull { it.key.startsWith("pin|") }?.value as? String)
+                ?.also { tvPrefs.edit().putString("pin", it).apply() }
+        if (saved == null) tvPrefs.edit().putString("pin", fp).apply()
         else if (saved != fp) {
             s.close()
             throw TvException("TV:n känns inte igen (den har ett nytt certifikat). Parkoppla igen under ⚙︎.")
@@ -198,7 +206,7 @@ class TvRemote(private val ctx: Context) {
 
     private fun clearPins() {
         val e = tvPrefs.edit()
-        for (k in tvPrefs.all.keys) if (k.startsWith("pin|")) e.remove(k)
+        for (k in tvPrefs.all.keys) if (k == "pin" || k.startsWith("pin|")) e.remove(k)
         e.apply()
     }
 

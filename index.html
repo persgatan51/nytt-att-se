@@ -433,7 +433,8 @@ const bigCache = (() => {
       catch{ return null; }
     },
     peek: k => mem.get(k) ?? null,                  // synkron läsning av det som redan laddats
-    async set(k, v){ mem.set(k, v); try{ await tx("readwrite", st => st.put(v, k)); }catch(e){ console.warn("Cache:", e); } },
+    // Returnerar false om IndexedDB inte gick att skriva till (värdet finns då bara kvar under sessionen).
+    async set(k, v){ mem.set(k, v); try{ await tx("readwrite", st => st.put(v, k)); return true; }catch(e){ console.warn("Cache:", e); return false; } },
     // Tar bort poster med något av prefixen där drop(nyckel, värde) är sant (t.ex. gamla rekommendationer).
     // Bara nycklar med prefixen läses, så de stora dagslistorna rörs inte.
     async prune(prefixes, drop){
@@ -564,9 +565,11 @@ const metaReady = (async () => { try{
     if (!m || typeof m !== "object") m = {};
     const now = Date.now();
     for (const v of Object.values(m)) if (v && typeof v === "object" && !v.t) v.t = now;
-    if (Object.keys(m).length) await bigCache.set("meta", m);
+    // Den gamla kopian tas bara bort när flytten lyckats – annars (t.ex. om IndexedDB är avstängt) får den ligga
+    // kvar, så att språk och länder inte måste hämtas om för varje titel vid varje start.
+    if (!Object.keys(m).length || await bigCache.set("meta", m)) try{ localStorage.removeItem("meta"); }catch{}
   }
-  try{ localStorage.removeItem("meta"); }catch{}
+  else try{ localStorage.removeItem("meta"); }catch{}
   meta = Object.assign(m, meta);                     // det som hunnit hämtas under tiden vinner
 }catch(e){ console.warn("meta:", e); } })();
 function saveMeta(){
@@ -600,15 +603,27 @@ let NET_TIMEOUT = 12000;   // let, så att röktestet kan korta den
 async function net(url, opts={}, name="tjänsten", onTry){
   for (let attempt = 0; ; attempt++){
     onTry?.();
-    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), NET_TIMEOUT);
-    let r;
+    // Avbrottet har ett begripligt fel som orsak, så att det också syns om svaret slutar komma mitt i
+    // (r.json()/r.text() avbryts med samma fel).
+    const ac = new AbortController(), hang = () => ac.abort(new Error(`Ingen kontakt med ${name} – försök igen.`));
+    let timer = setTimeout(hang, NET_TIMEOUT), r;
     try{ r = await fetch(url, { ...opts, signal:ac.signal }); }
     catch(e){
+      clearTimeout(timer);
       throw new Error(ac.signal.aborted ? `Ingen kontakt med ${name} – försök igen.`
                                         : `Ingen kontakt med ${name} – kontrollera nätet och försök igen.`);
     }
-    finally{ clearTimeout(timer); }
-    if (r.status !== 429 || attempt >= 1) return r;
+    // Svarshuvudena har kommit: själva innehållet får lika lång tid på sig till, sedan avbryts det.
+    clearTimeout(timer); timer = setTimeout(hang, NET_TIMEOUT);
+    if (r.status !== 429 || attempt >= 1){
+      // Webbläsaren avbryter läsningen med ett eget (engelskt) fel – byt det mot vårt.
+      for (const f of ["json", "text"]){
+        const read = r[f].bind(r);
+        r[f] = async () => { try{ return await read(); }catch(e){ throw ac.signal.aborted ? ac.signal.reason : e; } };
+      }
+      return r;
+    }
+    clearTimeout(timer);
     const ra = parseFloat(r.headers.get("retry-after"));
     await new Promise(ok => setTimeout(ok, Math.min(3, ra > 0 ? ra : 1) * 1000));
   }
@@ -1375,20 +1390,21 @@ function pair(host, name){
 }
 
 // ---------- Sök (TMDB) ----------
-const providerCache = {};   // tmdbId -> [tjänstnycklar]
+// tmdbId -> tjänsternas namn hos TMDB. Namnen (inte dina tjänster) sparas, så att en ändring av
+// "Mina tjänster" under ⚙︎ märks direkt i sökningen, skådespelarvyn och quizet utan omstart.
+const providerCache = {};
 // Tjänsterna per titel sparas ett dygn i IndexedDB (fresh = hämta nytt, används av bevakningen).
 async function myServicesFor(tmdbId, fresh=false){
-  if (!fresh && providerCache[tmdbId]) return providerCache[tmdbId];
-  let names = null;
-  if (!fresh){ const c = await bigCache.get("prov|"+tmdbId); if (c && Date.now() - c.t < 864e5) names = c.names; }
+  let names = fresh ? null : providerCache[tmdbId] || null;
+  if (!names && !fresh){ const c = await bigCache.get("prov|"+tmdbId); if (c && Date.now() - c.t < 864e5) names = c.names; }
   if (!names){
     const r = await tmdbGet(`/${tmdbId}/watch/providers`);
     const se = r.results?.SE || {};
     names = [...(se.flatrate||[]), ...(se.free||[]), ...(se.ads||[])].map(p=>(p.provider_name||"").trim());
     bigCache.set("prov|"+tmdbId, { t:Date.now(), names, se:seProviders(se) });
   }
-  const keys = mine().filter(svc => names.some(n => svc.match.test(n))).map(svc=>svc.key);
-  return (providerCache[tmdbId] = keys);
+  providerCache[tmdbId] = names;
+  return mine().filter(svc => names.some(n => svc.match.test(n))).map(svc=>svc.key);
 }
 
 // ---------- 💳 Gratis eller betala? ----------

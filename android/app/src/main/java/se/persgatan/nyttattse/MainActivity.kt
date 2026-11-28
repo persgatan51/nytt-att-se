@@ -55,6 +55,8 @@ class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
     // Bevakningen har en egen tråd, så att en lång koll inte blockerar TV-kommandona.
     private val watchWorker = Executors.newSingleThreadExecutor()
+    // YouTube-uppslaget för delningar har också en egen tråd, så att det inte väntar bakom en TV som inte svarar.
+    private val shareWorker = Executors.newSingleThreadExecutor()
     private val prefs by lazy { getSharedPreferences("tv", MODE_PRIVATE) }
     // Det som senast delats till appen (Dela → Nytt att se), som JSON { text, subject }. Webbappen hämtar
     // det med TvBridge.takeShared() när sidan laddats, eller direkt via window.__onShare om den redan är öppen.
@@ -79,7 +81,7 @@ class MainActivity : Activity() {
         // CORS-regler. Misslyckas det lämnas länken över ändå, och webbappen försöker själv.
         val yt = YT_LINK.find(text)?.value
         if (yt != null && subject.isBlank() && text.replace(yt, "").isBlank()) {
-            worker.execute {
+            shareWorker.execute {
                 val title = ytTitle(yt)
                 shared = JSONObject().put("text", text).put("subject", title ?: "").toString()
                 runOnUiThread { if (trusted && ::web.isInitialized) web.evaluateJavascript("window.__onShare && window.__onShare()", null) }
@@ -103,6 +105,10 @@ class MainActivity : Activity() {
     // 0 = vanlig laddning, 1 = cachen provas, 2 = sidan utan nät visas.
     private var fallback = 0
     private var cacheLoading = false
+    // Sätts om huvudsidan inte kunde laddas, så att onPageFinished för den misslyckade laddningen inte räknas som lyckad.
+    private var pageError = false
+    // När renderaren senast startades om – kraschar den gång på gång visas en felsida i stället för en evig loop.
+    private val restarts = ArrayDeque<Long>()
 
     private fun loadStart() {
         fallback = 0
@@ -112,13 +118,17 @@ class MainActivity : Activity() {
         web.loadUrl(START_URL, mapOf("Cache-Control" to "no-cache"))
     }
 
-    private fun offlineHtml() = """<!doctype html><html lang="sv"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Ingen anslutning</title>
+    private fun offlineHtml(
+        title: String = "Ingen anslutning",
+        text: String = "Nytt att se behöver internet första gången. Kontrollera wifi eller mobildata.",
+        icon: String = "📡"
+    ) = """<!doctype html><html lang="sv"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>$title</title>
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1115;color:#e8eaf0;
 font-family:system-ui,sans-serif;text-align:center;padding:24px;box-sizing:border-box}h1{font-size:1.3rem}p{color:#9aa3b2}
 a{display:inline-block;margin-top:16px;padding:12px 22px;border-radius:999px;background:#e50914;color:#fff;text-decoration:none;font-weight:600}</style>
-</head><body><main><div style="font-size:3rem">📡</div><h1>Ingen anslutning</h1>
-<p>Nytt att se behöver internet första gången. Kontrollera wifi eller mobildata.</p>
+</head><body><main><div style="font-size:3rem">$icon</div><h1>$title</h1>
+<p>$text</p>
 <a href="$START_URL">Försök igen</a></main></body></html>"""
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -141,13 +151,19 @@ a{display:inline-block;margin-top:16px;padding:12px 22px;border-radius:999px;bac
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 trusted = isOurPage(url?.let { Uri.parse(it) })
+                pageError = false
                 if (fallback == 1) cacheLoading = true
                 super.onPageStarted(view, url, favicon)
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
-                // Sidan från cachen är laddad: API-anropen ska gå mot nätet som vanligt.
-                if (cacheLoading) { cacheLoading = false; view.settings.cacheMode = WebSettings.LOAD_DEFAULT }
+                // Sidan från cachen är laddad: API-anropen ska gå mot nätet som vanligt, och nästa fel
+                // provar cachen igen i stället för att gå direkt till sidan utan nät.
+                if (cacheLoading) {
+                    cacheLoading = false
+                    view.settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    if (!pageError && isOurPage(url?.let { Uri.parse(it) })) fallback = 0
+                }
                 super.onPageFinished(view, url)
             }
 
@@ -158,9 +174,12 @@ a{display:inline-block;margin-top:16px;padding:12px 22px;border-radius:999px;bac
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame || !isOurPage(request.url)) return
+                pageError = true
                 if (fallback == 0) {
                     fallback = 1
-                    view.settings.cacheMode = WebSettings.LOAD_CACHE_ONLY
+                    // Cachen först, men nätet om något saknas där – sidans egna API-anrop startar innan
+                    // onPageFinished och ska inte stoppas om nätet hunnit komma tillbaka.
+                    view.settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
                     view.post { view.loadUrl(START_URL) }
                 } else {
                     fallback = 2
@@ -178,7 +197,18 @@ a{display:inline-block;margin-top:16px;padding:12px 22px;border-radius:999px;bac
                 try { view.destroy() } catch (_: Exception) {}
                 web = createWebView()
                 setContentView(web)
-                loadStart()
+                // Högst två omstarter per minut. Kraschar renderaren oftare visas en felsida med "Försök igen".
+                val now = System.currentTimeMillis()
+                while (restarts.isNotEmpty() && now - restarts.first() > 60_000) restarts.removeFirst()
+                if (restarts.size >= 2) {
+                    restarts.clear()
+                    fallback = 2
+                    web.loadDataWithBaseURL(null, offlineHtml("Något gick fel",
+                        "Sidan stängdes flera gånger i rad. Stäng andra appar och försök igen.", "⚠️"), "text/html", "utf-8", null)
+                } else {
+                    restarts.addLast(now)
+                    loadStart()
+                }
                 return true
             }
         }
